@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
@@ -5,14 +6,25 @@ import 'package:window_manager/window_manager.dart';
 import 'models.dart';
 import 'store.dart';
 
-/// Highlight palette (ARGB, semi-opaque so it reads on both light and dark).
+/// Sticky-note palette. The app intentionally ignores the system theme:
+/// it looks like a paper sticky note everywhere.
+class StickyColors {
+  static const paper = Color(0xFFFCEFA8);
+  static const paperDeep = Color(0xFFF5E086);
+  static const ink = Color(0xFF4A3F1F);
+  static const inkSoft = Color(0xFF8A7B52);
+  static const line = Color(0x334A3F1F);
+  static const selection = Color(0x1F4A3F1F);
+}
+
+/// Highlight palette (marker-style, semi-opaque over the paper color).
 const List<Color> kHighlightColors = [
   Color(0x00000000), // none
-  Color(0x66FFD54F), // yellow
-  Color(0x66A5D6A7), // green
-  Color(0x6690CAF9), // blue
-  Color(0x66F48FB1), // pink
-  Color(0x66FFAB91), // orange
+  Color(0x99FFD54F), // yellow
+  Color(0x99A5D6A7), // green
+  Color(0x9990CAF9), // blue
+  Color(0x99F48FB1), // pink
+  Color(0x99FFAB91), // orange
 ];
 
 /// Font size presets cycled by the size button.
@@ -25,17 +37,20 @@ class StickyPanelApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final seed = Colors.amber;
     return MaterialApp(
       title: 'Sticky Panel',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: seed),
         useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
-        useMaterial3: true,
+        scaffoldBackgroundColor: StickyColors.paper,
+        splashFactory: NoSplash.splashFactory,
+        highlightColor: Colors.transparent,
+        dividerTheme:
+            const DividerThemeData(color: StickyColors.line, thickness: 1),
+        dialogTheme:
+            const DialogThemeData(backgroundColor: StickyColors.paper),
+        bottomSheetTheme: const BottomSheetThemeData(
+            backgroundColor: StickyColors.paper),
       ),
       home: HomePage(store: store),
     );
@@ -52,6 +67,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static final bool _isMac = defaultTargetPlatform == TargetPlatform.macOS;
+
   bool _alwaysOnTop = true;
   bool _addAsTodo = false;
   String? _selectedEntryId;
@@ -113,72 +130,88 @@ class _HomePageState extends State<HomePage> {
   // ---------------------------------------------------------------- title bar
 
   Widget _buildTitleBar(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Container(
-      height: 40,
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      height: 38,
+      color: StickyColors.paperDeep,
       child: Row(
         children: [
+          // macOS keeps its native traffic-light buttons even with a hidden
+          // title bar — leave room for them and don't draw our own controls.
+          if (_isMac) const SizedBox(width: 72),
           Expanded(
             child: DragToMoveArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    Icon(Icons.sticky_note_2_outlined, size: 16, color: scheme.primary),
+              child: Row(
+                children: [
+                  if (!_isMac) ...[
+                    const SizedBox(width: 10),
+                    const Icon(Icons.sticky_note_2_outlined,
+                        size: 15, color: StickyColors.inkSoft),
                     const SizedBox(width: 6),
-                    Text('Sticky Panel',
-                        style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
                   ],
-                ),
+                  const Text('Sticky Panel',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: StickyColors.inkSoft,
+                          fontWeight: FontWeight.w600)),
+                ],
               ),
             ),
           ),
-          IconButton(
-            tooltip: _alwaysOnTop ? '取消置顶' : '窗口置顶',
-            icon: Icon(
-              _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
-              size: 18,
-              color: _alwaysOnTop ? scheme.primary : scheme.onSurfaceVariant,
-            ),
-            onPressed: _toggleAlwaysOnTop,
+          _titleBarIcon(
+            _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
+            _alwaysOnTop ? '取消置顶' : '窗口置顶',
+            _toggleAlwaysOnTop,
+            active: _alwaysOnTop,
           ),
           PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, size: 18, color: scheme.onSurfaceVariant),
+            icon: const Icon(Icons.more_vert,
+                size: 17, color: StickyColors.inkSoft),
             tooltip: '更多',
+            color: StickyColors.paper,
             onSelected: (value) {
               final project = store.selected;
-              if (value == 'clear_done' && project != null) store.clearDone(project);
+              if (value == 'clear_done' && project != null) {
+                store.clearDone(project);
+              }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(value: 'clear_done', child: Text('清除已完成待办')),
+              PopupMenuItem(
+                value: 'clear_done',
+                child: Text('清除已完成待办',
+                    style: TextStyle(fontSize: 13, color: StickyColors.ink)),
+              ),
             ],
           ),
-          IconButton(
-            tooltip: '最小化',
-            icon: Icon(Icons.minimize, size: 18, color: scheme.onSurfaceVariant),
-            onPressed: () => windowManager.minimize(),
-          ),
-          IconButton(
-            tooltip: '关闭',
-            icon: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
-            onPressed: () => windowManager.close(),
-          ),
-          const SizedBox(width: 4),
+          // Windows has no native controls with a hidden title bar.
+          if (!_isMac) ...[
+            _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
+            _titleBarIcon(Icons.close, '关闭', windowManager.close),
+            const SizedBox(width: 4),
+          ] else
+            const SizedBox(width: 6),
         ],
       ),
+    );
+  }
+
+  Widget _titleBarIcon(IconData icon, String tooltip, VoidCallback onPressed,
+      {bool active = false}) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon,
+          size: 17, color: active ? StickyColors.ink : StickyColors.inkSoft),
+      onPressed: onPressed,
     );
   }
 
   // -------------------------------------------------------------- project bar
 
   Widget _buildProjectBar(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
       height: 44,
       child: Row(
         children: [
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
@@ -187,17 +220,36 @@ class _HomePageState extends State<HomePage> {
               itemBuilder: (context, index) {
                 final project = store.projects[index];
                 final selected = index == store.selectedIndex;
-                return GestureDetector(
-                  onLongPress: () => _showProjectMenu(context, project),
-                  child: ChoiceChip(
-                    label: Text(project.name, style: const TextStyle(fontSize: 12)),
-                    selected: selected,
-                    showCheckmark: false,
-                    visualDensity: VisualDensity.compact,
-                    onSelected: (_) {
+                return Center(
+                  child: GestureDetector(
+                    onTap: () {
                       store.selectProject(index);
                       setState(() => _selectedEntryId = null);
                     },
+                    onLongPress: () => _showProjectMenu(context, project),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: selected ? StickyColors.ink : Colors.transparent,
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: selected
+                              ? StickyColors.ink
+                              : StickyColors.line,
+                        ),
+                      ),
+                      child: Text(
+                        project.name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: selected
+                              ? StickyColors.paper
+                              : StickyColors.ink,
+                        ),
+                      ),
+                    ),
                   ),
                 );
               },
@@ -205,7 +257,7 @@ class _HomePageState extends State<HomePage> {
           ),
           IconButton(
             tooltip: '新建项目',
-            icon: Icon(Icons.add, size: 20, color: scheme.onSurfaceVariant),
+            icon: const Icon(Icons.add, size: 19, color: StickyColors.inkSoft),
             onPressed: () => _editProjectName(context, null),
           ),
         ],
@@ -214,7 +266,6 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _showProjectMenu(BuildContext context, Project project) {
-    final scheme = Theme.of(context).colorScheme;
     showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -223,8 +274,10 @@ class _HomePageState extends State<HomePage> {
           children: [
             ListTile(
               dense: true,
-              leading: const Icon(Icons.edit_outlined),
-              title: Text('重命名「${project.name}」'),
+              leading:
+                  const Icon(Icons.edit_outlined, color: StickyColors.ink),
+              title: Text('重命名「${project.name}」',
+                  style: const TextStyle(color: StickyColors.ink)),
               onTap: () {
                 Navigator.pop(context);
                 _editProjectName(context, project);
@@ -232,8 +285,9 @@ class _HomePageState extends State<HomePage> {
             ),
             ListTile(
               dense: true,
-              leading: Icon(Icons.delete_outline, color: scheme.error),
-              title: Text('删除「${project.name}」', style: TextStyle(color: scheme.error)),
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: Text('删除「${project.name}」',
+                  style: const TextStyle(color: Colors.red)),
               onTap: () {
                 Navigator.pop(context);
                 store.deleteProject(project);
@@ -251,18 +305,29 @@ class _HomePageState extends State<HomePage> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(project == null ? '新建项目' : '重命名项目'),
+        title: Text(project == null ? '新建项目' : '重命名项目',
+            style: const TextStyle(fontSize: 15, color: StickyColors.ink)),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '项目名称'),
+          style: const TextStyle(color: StickyColors.ink),
+          decoration: const InputDecoration(
+            hintText: '项目名称',
+            hintStyle: TextStyle(color: StickyColors.inkSoft),
+          ),
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          FilledButton(
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消',
+                style: TextStyle(color: StickyColors.inkSoft)),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('确定'),
+            child: const Text('确定',
+                style: TextStyle(
+                    color: StickyColors.ink, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -278,13 +343,12 @@ class _HomePageState extends State<HomePage> {
   // --------------------------------------------------------------- entry list
 
   Widget _buildEntryList(BuildContext context, Project project) {
-    final scheme = Theme.of(context).colorScheme;
     if (project.entries.isEmpty) {
-      return Center(
+      return const Center(
         child: Text(
           '还没有内容\n在下方输入一行，随手记下来',
           textAlign: TextAlign.center,
-          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+          style: TextStyle(color: StickyColors.inkSoft, fontSize: 13),
         ),
       );
     }
@@ -327,16 +391,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildEntryToolbar(BuildContext context, Project project, Entry entry) {
-    final scheme = Theme.of(context).colorScheme;
     final sizeIndex = kFontSizes.indexWhere((s) => (s - entry.fontSize).abs() < 0.1);
 
     Widget iconBtn(IconData icon, String tooltip, VoidCallback onPressed,
         {bool active = false}) {
       return IconButton(
-        icon: Icon(icon, size: 18),
+        icon: Icon(icon, size: 17),
         tooltip: tooltip,
         visualDensity: VisualDensity.compact,
-        color: active ? scheme.primary : scheme.onSurfaceVariant,
+        color: active ? StickyColors.ink : StickyColors.inkSoft,
         onPressed: onPressed,
       );
     }
@@ -359,21 +422,22 @@ class _HomePageState extends State<HomePage> {
             GestureDetector(
               onTap: () => store.setHighlight(entry, color.toARGB32()),
               child: Container(
-                width: 20,
-                height: 20,
+                width: 18,
+                height: 18,
                 margin: const EdgeInsets.symmetric(horizontal: 3),
                 decoration: BoxDecoration(
-                  color: color.toARGB32() == 0 ? scheme.surfaceContainerHighest : color,
+                  color: color.toARGB32() == 0 ? StickyColors.paper : color,
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: entry.highlight == color.toARGB32()
-                        ? scheme.primary
-                        : scheme.outlineVariant,
+                        ? StickyColors.ink
+                        : StickyColors.line,
                     width: entry.highlight == color.toARGB32() ? 2 : 1,
                   ),
                 ),
                 child: color.toARGB32() == 0
-                    ? Icon(Icons.block, size: 12, color: scheme.onSurfaceVariant)
+                    ? const Icon(Icons.block,
+                        size: 11, color: StickyColors.inkSoft)
                     : null,
               ),
             ),
@@ -386,12 +450,12 @@ class _HomePageState extends State<HomePage> {
             },
           ),
           Text('${entry.fontSize.toInt()}',
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
-          iconBtn(Icons.delete_outline, '删除此行',
-              () {
-                store.removeEntry(project, entry);
-                setState(() => _selectedEntryId = null);
-              }),
+              style:
+                  const TextStyle(fontSize: 11, color: StickyColors.inkSoft)),
+          iconBtn(Icons.delete_outline, '删除此行', () {
+            store.removeEntry(project, entry);
+            setState(() => _selectedEntryId = null);
+          }),
         ],
       ),
     );
@@ -400,37 +464,47 @@ class _HomePageState extends State<HomePage> {
   // ---------------------------------------------------------------- input bar
 
   Widget _buildInputBar(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
       child: Row(
         children: [
           IconButton(
             tooltip: _addAsTodo ? '新增为待办（点击切换）' : '新增为备忘（点击切换）',
             icon: Icon(
               _addAsTodo ? Icons.check_box : Icons.notes,
-              size: 20,
-              color: _addAsTodo ? scheme.primary : scheme.onSurfaceVariant,
+              size: 19,
+              color: _addAsTodo ? StickyColors.ink : StickyColors.inkSoft,
             ),
             onPressed: () => setState(() => _addAsTodo = !_addAsTodo),
           ),
           Expanded(
-            child: CallbackShortcuts(
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.enter): _submitInput,
-              },
-              child: TextField(
-                controller: _inputController,
-                focusNode: _inputFocus,
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: _addAsTodo ? '记一条待办…' : '随手记一行…',
-                  isDense: true,
-                  border: const OutlineInputBorder(),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0x33FFFFFF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: StickyColors.line),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.enter): _submitInput,
+                },
+                child: TextField(
+                  controller: _inputController,
+                  focusNode: _inputFocus,
+                  style: const TextStyle(
+                      fontSize: 14, color: StickyColors.ink),
+                  cursorColor: StickyColors.ink,
+                  decoration: InputDecoration(
+                    hintText: _addAsTodo ? '记一条待办…' : '随手记一行…',
+                    hintStyle: const TextStyle(color: StickyColors.inkSoft),
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 9),
+                  ),
+                  onSubmitted: (_) => _submitInput(),
                 ),
-                onSubmitted: (_) => _submitInput(),
               ),
             ),
           ),
@@ -498,14 +572,15 @@ class _EntryTileState extends State<_EntryTile> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final entry = widget.entry;
 
     final textStyle = TextStyle(
       fontSize: entry.fontSize,
       fontWeight: entry.bold ? FontWeight.bold : FontWeight.normal,
       decoration: entry.isTodo && entry.done ? TextDecoration.lineThrough : null,
-      color: entry.isTodo && entry.done ? scheme.onSurfaceVariant : scheme.onSurface,
+      color: entry.isTodo && entry.done
+          ? StickyColors.inkSoft
+          : StickyColors.ink,
     );
 
     return Column(
@@ -523,24 +598,31 @@ class _EntryTileState extends State<_EntryTile> {
                     ? Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: Checkbox(
-                              value: entry.done,
-                              visualDensity: VisualDensity.compact,
-                              onChanged: (_) => widget.onToggleDone(),
+                          GestureDetector(
+                            onTap: widget.onToggleDone,
+                            child: Icon(
+                              entry.done
+                                  ? Icons.check_box
+                                  : Icons.check_box_outline_blank,
+                              size: 17,
+                              color: entry.done
+                                  ? StickyColors.inkSoft
+                                  : StickyColors.ink,
                             ),
                           ),
                           if (widget.todoNumber != null)
-                            Text('${widget.todoNumber}',
-                                style: TextStyle(
-                                    fontSize: 10, color: scheme.onSurfaceVariant)),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 2),
+                              child: Text('${widget.todoNumber}',
+                                  style: const TextStyle(
+                                      fontSize: 10,
+                                      color: StickyColors.inkSoft)),
+                            ),
                         ],
                       )
-                    : Center(
+                    : const Center(
                         child: Icon(Icons.circle,
-                            size: 5, color: scheme.onSurfaceVariant),
+                            size: 5, color: StickyColors.inkSoft),
                       ),
               ),
               Expanded(
@@ -550,6 +632,7 @@ class _EntryTileState extends State<_EntryTile> {
                         focusNode: _focusNode,
                         autofocus: true,
                         style: textStyle,
+                        cursorColor: StickyColors.ink,
                         decoration: const InputDecoration(
                           isDense: true,
                           border: InputBorder.none,
@@ -574,8 +657,7 @@ class _EntryTileState extends State<_EntryTile> {
                           decoration: BoxDecoration(
                             color: entry.highlight == 0
                                 ? (widget.selected
-                                    ? scheme.surfaceContainerHighest
-                                        .withValues(alpha: 0.4)
+                                    ? StickyColors.selection
                                     : null)
                                 : Color(entry.highlight),
                             borderRadius: BorderRadius.circular(4),
