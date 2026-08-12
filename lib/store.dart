@@ -50,6 +50,10 @@ class AppStore extends ChangeNotifier {
     );
   }
 
+  /// Save without notifying listeners — used while typing, where the
+  /// TextField already shows the new text and a rebuild would be wasted.
+  void persist() => _save();
+
   void selectProject(int index) {
     if (index < 0 || index >= projects.length) return;
     selectedIndex = index;
@@ -87,6 +91,33 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
     _save();
     return entry;
+  }
+
+  /// Insert a new empty line right after [after] (or at the start if null).
+  Entry insertEntryAfter(Project project, Entry? after) {
+    final entry = Entry(id: _newId(), text: '');
+    final index = after == null ? -1 : project.entries.indexOf(after);
+    project.entries.insert(index + 1, entry);
+    notifyListeners();
+    _save();
+    return entry;
+  }
+
+  /// The heading a line belongs to: the nearest heading above it on the
+  /// board, or null when there is none.
+  static String? sectionNameFor(Project project, Entry entry) {
+    String? section;
+    for (final e in project.entries) {
+      if (e == entry) break;
+      if (e.isHeading) section = e.text;
+    }
+    return section;
+  }
+
+  void setHeading(Entry entry, bool isHeading) {
+    entry.isHeading = isHeading;
+    notifyListeners();
+    _save();
   }
 
   void updateEntryText(Entry entry, String text) {

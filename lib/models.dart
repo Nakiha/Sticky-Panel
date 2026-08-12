@@ -13,6 +13,7 @@ class Entry {
     required this.id,
     required this.text,
     this.isTodo = false,
+    this.isHeading = false,
     this.done = false,
     this.bold = false,
     this.highlight = 0,
@@ -22,8 +23,14 @@ class Entry {
   final String id;
   String text;
 
-  /// Whether this line shows a checkbox and behaves as a task.
+  /// Whether this line shows a checkbox and appears in the todo section.
   bool isTodo;
+
+  /// Whether this line renders as a section heading on the board.
+  ///
+  /// Headings double as grouping labels: a todo pulled from the board is
+  /// tagged with the nearest heading above it.
+  bool isHeading;
 
   /// Completion state; only meaningful when [isTodo] is true.
   bool done;
@@ -41,6 +48,7 @@ class Entry {
         'id': id,
         'text': text,
         'isTodo': isTodo,
+        'isHeading': isHeading,
         'done': done,
         'bold': bold,
         'highlight': highlight,
@@ -51,6 +59,7 @@ class Entry {
         id: json['id'] as String,
         text: json['text'] as String? ?? '',
         isTodo: json['isTodo'] as bool? ?? false,
+        isHeading: json['isHeading'] as bool? ?? false,
         done: json['done'] as bool? ?? false,
         bold: json['bold'] as bool? ?? false,
         highlight: (json['highlight'] as num?)?.toInt() ?? 0,
