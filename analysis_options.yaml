@@ -1,0 +1,12 @@
+analyzer:
+  exclude:
+    - build/**
+  errors:
+    avoid_print: warning
+
+linter:
+  rules:
+    - avoid_print
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - use_super_parameters

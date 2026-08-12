@@ -1,9 +1,24 @@
-bin/
-obj/
-artifacts/
-.vs/
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+
+# Generated Windows runner (created by CI to keep this branch compact)
+windows/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
 *.user
 *.suo
+.DS_Store
+
+# Portable user data
 StickPanel.data.json
 StickPanel.data.json.tmp
-StickPanel.data.json.broken-*

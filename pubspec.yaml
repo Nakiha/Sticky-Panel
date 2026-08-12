@@ -1,0 +1,21 @@
+name: stick_panel
+description: A tiny portable always-on-top note and checklist for Windows.
+publish_to: none
+version: 0.2.0+1
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.9
+  flutter_acrylic: ^1.1.4
+  window_manager: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: false

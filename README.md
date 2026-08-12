@@ -1,54 +1,48 @@
-# Stick Panel
+# Sticky Panel — Flutter branch
 
-A small, modern, always-on-top checklist for Windows. It is built with native
-WinUI 3, follows the system light/dark theme, supports Unicode and emoji, and
-saves everything beside the executable.
+A small, portable, always-on-top note and checklist for Windows. This branch replaces the WinUI 3 implementation with Flutter and uses a calm, Apple-inspired visual language.
 
-## Features
+The original WinUI 3 version remains untouched on [`main`](https://github.com/Nakiha/Sticky-Panel/tree/main).
 
-- Native Windows 11 acrylic backdrop and per-monitor DPI support
-- Editable checklist with completed-task state and quick cleanup
-- Always-on-top toggle (`Ctrl+Shift+A`)
-- Automatic, atomic JSON saves beside `StickPanel.exe`
-- Window position and size restoration across displays
-- Portable, unpackaged, self-contained single-file EXE
-- x64 and ARM64 builds from GitHub Actions
+## Current features
+
+- Frameless, resizable, always-on-top panel
+- Native Windows Acrylic behind a custom Flutter surface
+- Free-form note plus editable checklist
+- Completed items fade and receive a strikethrough
+- Unicode, Chinese, Japanese, and emoji font fallback
+- Automatic portable JSON storage beside the executable
+- Window position, size, and pin state persistence
+- `Ctrl + Enter` to add a checklist item
+- No .NET or Windows App Runtime dependency
 
 ## Download
 
-Open the repository's **Actions** tab, choose the latest successful
-**Build portable EXE** run, and download `StickPanel-win-x64`. Tagged builds
-are also attached to GitHub Releases.
+Open the latest successful [Flutter build](https://github.com/Nakiha/Sticky-Panel/actions/workflows/build.yml?query=branch%3Aflutter), download `StickPanel-windows-x64-portable`, and extract the ZIP before running `StickPanel.exe`.
 
-The first launch can take a little longer because the self-contained WinUI 3
-runtime is extracted to a temporary directory. No installer or separately
-installed Windows App SDK runtime is required.
+The EXE must stay beside its `data` directory and Flutter DLLs. User content is written to `StickPanel.data.json` in that same folder.
 
-## Keyboard shortcuts
+## Build locally
 
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+Enter` | Focus the new-task box |
-| `Ctrl+Shift+A` | Toggle always on top |
-| `Ctrl+S` | Save immediately |
-| `Enter` in a task | Focus the new-task box |
-| `Shift+Enter` in a task | Insert a new line |
-
-## Local build
-
-Requirements: Windows 10 1809 or later and the .NET 10 SDK.
+Install the current Flutter stable SDK with Windows desktop support, then run:
 
 ```powershell
-dotnet publish src/StickPanel/StickPanel.csproj `
-  -c Release -r win-x64 --self-contained true `
-  -p:Platform=x64 -p:PublishSingleFile=true
+flutter create --platforms=windows --project-name stick_panel --org io.github.nakiha .
+flutter pub get
+flutter run -d windows
 ```
 
-## Data
+Release build:
 
-`StickPanel.data.json` is created next to the EXE. Keep the executable in a
-writable folder if you want fully portable behavior. A malformed JSON file is
-preserved with a `.broken-<timestamp>` suffix before a fresh state is created.
+```powershell
+flutter build windows --release
+```
+
+## Notes
+
+- Windows x64 is the supported release target for now.
+- Acrylic requires Windows 10 1803 or newer. The interface remains usable if the system falls back to a solid composition surface.
+- Running from a protected directory such as `Program Files` can prevent portable data writes. Extract to a user-writable folder.
 
 ## License
 
