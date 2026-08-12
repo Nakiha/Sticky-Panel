@@ -146,7 +146,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
+    final perfWatch = Stopwatch()..start();
+    final built = AnimatedBuilder(
       animation: store,
       builder: (context, _) {
         final project = store.selected;
@@ -185,6 +186,10 @@ class _HomePageState extends State<HomePage> {
         );
       },
     );
+    if (perfWatch.elapsedMilliseconds > 8) {
+      debugPrint('[perf] page build: ${perfWatch.elapsedMilliseconds}ms');
+    }
+    return built;
   }
 
   // ------------------------------------------------------------------ top bar
@@ -240,41 +245,22 @@ class _HomePageState extends State<HomePage> {
     final selected = index == store.selectedIndex;
     final projectColor =
         project.colorValue == 0 ? null : Color(project.colorValue);
-    return GestureDetector(
-      onTap: () => store.selectProject(index),
+    return _ProjectTab(
+      selected: selected,
+      projectColor: projectColor,
+      name: project.name,
+      textColor: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+      surfaceColor: scheme.surface,
+      // Switch on pointer DOWN (like browser tabs and like the instant
+      // ripple of the + button) instead of waiting for pointer-up.
+      onPressed: () {
+        final sw = Stopwatch()..start();
+        store.selectProject(index);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          debugPrint('[perf] tab switch press->frame: ${sw.elapsedMilliseconds}ms');
+        });
+      },
       onLongPress: () => _showProjectMenu(context, project),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 140),
-        margin: const EdgeInsets.only(top: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          // The selected tab uses the content background color, so it reads
-          // as one surface with the editor below (Chrome-style).
-          color: selected ? scheme.surface : Colors.transparent,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (projectColor != null) ...[
-              Icon(Icons.circle, size: 7, color: projectColor),
-              const SizedBox(width: 5),
-            ],
-            Flexible(
-              child: Text(
-                project.name,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: selected
-                      ? scheme.onSurface
-                      : scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -612,10 +598,15 @@ class _HomePageState extends State<HomePage> {
 
   /// Todo spans of one project, grouped by their section (nearest heading).
   Map<String, List<TodoSpan>> _todoGroupsFor(Project project) {
+    final sw = Stopwatch()..start();
     final ops = store.controllerFor(project).document.toDelta().toJson();
     final groups = <String, List<TodoSpan>>{};
     for (final span in parseTodoSpans(ops)) {
       groups.putIfAbsent(span.section, () => []).add(span);
+    }
+    if (sw.elapsedMilliseconds > 5) {
+      debugPrint('[perf] todo parse: ${sw.elapsedMilliseconds}ms '
+          '(${ops.length} ops)');
     }
     return groups;
   }
@@ -822,6 +813,93 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A Chrome-style tab with immediate press feedback, hover state and a
+/// short background animation.
+class _ProjectTab extends StatefulWidget {
+  const _ProjectTab({
+    required this.selected,
+    required this.projectColor,
+    required this.name,
+    required this.textColor,
+    required this.surfaceColor,
+    required this.onPressed,
+    required this.onLongPress,
+  });
+
+  final bool selected;
+  final Color? projectColor;
+  final String name;
+  final Color textColor;
+  final Color surfaceColor;
+  final VoidCallback onPressed;
+  final VoidCallback onLongPress;
+
+  @override
+  State<_ProjectTab> createState() => _ProjectTabState();
+}
+
+class _ProjectTabState extends State<_ProjectTab> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color background;
+    if (widget.selected) {
+      // The selected tab uses the content background color, so it reads as
+      // one surface with the editor below (Chrome-style).
+      background = widget.surfaceColor;
+    } else if (_pressed) {
+      background = widget.surfaceColor.withValues(alpha: 0.85);
+    } else if (_hovered) {
+      background = widget.surfaceColor.withValues(alpha: 0.45);
+    } else {
+      background = Colors.transparent;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTapDown: (_) {
+          setState(() => _pressed = true);
+          widget.onPressed();
+        },
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onLongPress: widget.onLongPress,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          constraints: const BoxConstraints(maxWidth: 140),
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.projectColor != null) ...[
+                Icon(Icons.circle, size: 7, color: widget.projectColor),
+                const SizedBox(width: 5),
+              ],
+              Flexible(
+                child: Text(
+                  widget.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: widget.textColor),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
