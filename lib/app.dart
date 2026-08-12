@@ -87,8 +87,8 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  /// Jump from a todo back to its source line in the editor.
-  void _revealLine(Project project, DocLine line) {
+  /// Jump from a todo back to its source span in the editor.
+  void _revealSpan(Project project, TodoSpan span) {
     final projectIndex = store.projects.indexOf(project);
     setState(() => _todoExpanded = false);
     if (projectIndex >= 0 && projectIndex != store.selectedIndex) {
@@ -98,10 +98,11 @@ class _HomePageState extends State<HomePage> {
       _editorFocusNode.requestFocus();
       final controller = store.controllerFor(project);
       controller.updateSelection(
-        TextSelection.collapsed(offset: line.start),
+        TextSelection(
+            baseOffset: span.start, extentOffset: span.start + span.length),
         ChangeSource.local,
       );
-      // Best effort: nudge the caret into view once the editor has laid out.
+      // Best effort: nudge the selection into view once layout settles.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_editorScrollController.hasClients) {
           _editorScrollController.animateTo(
@@ -127,8 +128,6 @@ class _HomePageState extends State<HomePage> {
               _buildProjectBar(context),
               const Divider(height: 1),
               if (!_todoExpanded && project != null) ...[
-                _buildToolbar(context, project),
-                const Divider(height: 1),
                 Expanded(child: _buildEditor(context, project)),
                 const Divider(height: 1),
               ],
@@ -331,69 +330,182 @@ class _HomePageState extends State<HomePage> {
 
   // ------------------------------------------------------------ quill editor
 
-  Widget _buildToolbar(BuildContext context, Project project) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      color: scheme.surfaceContainerHighest,
-      child: QuillSimpleToolbar(
-        controller: store.controllerFor(project),
-        config: const QuillSimpleToolbarConfig(
-          multiRowsDisplay: false,
-          showDividers: false,
-          showFontFamily: false,
-          showFontSize: true,
-          showBoldButton: true,
-          showItalicButton: false,
-          showUnderLineButton: false,
-          showStrikeThrough: false,
-          showInlineCode: false,
-          showColorButton: false,
-          showBackgroundColorButton: true,
-          showClearFormat: false,
-          showHeaderStyle: true,
-          showListNumbers: false,
-          showListBullets: false,
-          showListCheck: true,
-          showCodeBlock: false,
-          showQuote: false,
-          showIndent: false,
-          showLink: false,
-          showUndo: true,
-          showRedo: true,
-          showSearchButton: false,
-          showSubscript: false,
-          showSuperscript: false,
-        ),
-      ),
-    );
-  }
+  /// Highlight choices in the selection panel: quill color string + swatch.
+  static const _highlights = <(String?, Color)>[
+    (null, Colors.transparent),
+    ('rgba(255,213,79,0.55)', Color(0xFFFFD54F)),
+    ('rgba(165,214,167,0.55)', Color(0xFFA5D6A7)),
+    ('rgba(144,202,249,0.55)', Color(0xFF90CAF9)),
+    ('rgba(244,143,177,0.55)', Color(0xFFF48FB1)),
+    ('rgba(255,171,145,0.55)', Color(0xFFFFAB91)),
+  ];
+
+  static const _fontSizes = ['13', '15', '18', '22'];
 
   Widget _buildEditor(BuildContext context, Project project) {
     final scheme = Theme.of(context).colorScheme;
     // Quill derives its base text style from the ambient DefaultTextStyle,
     // so this keeps the document readable in both light and dark mode.
-    return DefaultTextStyle(
-      style: TextStyle(fontSize: 14, height: 1.4, color: scheme.onSurface),
-      child: QuillEditor(
-        key: ValueKey(project.id),
-        controller: store.controllerFor(project),
-        focusNode: _editorFocusNode,
-        scrollController: _editorScrollController,
-        config: const QuillEditorConfig(
-          placeholder: '随手记…',
-          padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
-          expands: true,
+    return Stack(
+      children: [
+        DefaultTextStyle(
+          style: TextStyle(fontSize: 14, height: 1.4, color: scheme.onSurface),
+          child: QuillEditor(
+            key: ValueKey(project.id),
+            controller: store.controllerFor(project),
+            focusNode: _editorFocusNode,
+            scrollController: _editorScrollController,
+            config: const QuillEditorConfig(
+              placeholder: '随手记…',
+              padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
+              expands: true,
+            ),
+          ),
         ),
-      ),
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: 8,
+          child: _buildSelectionPanel(context, project),
+        ),
+      ],
+    );
+  }
+
+  /// Floating rich-text mini panel that appears while text is selected.
+  Widget _buildSelectionPanel(BuildContext context, Project project) {
+    final scheme = Theme.of(context).colorScheme;
+    final controller = store.controllerFor(project);
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final selection = controller.selection;
+        final visible = selection.isValid && !selection.isCollapsed;
+        final attrs = controller.getSelectionStyle().attributes;
+
+        Widget iconBtn(IconData icon, String tooltip, VoidCallback onPressed,
+            {bool active = false}) {
+          return IconButton(
+            icon: Icon(icon, size: 17),
+            tooltip: tooltip,
+            visualDensity: VisualDensity.compact,
+            color: active ? scheme.primary : scheme.onSurfaceVariant,
+            onPressed: onPressed,
+          );
+        }
+
+        final sizeValue = attrs['size']?.value?.toString();
+        final background = attrs['background']?.value?.toString();
+        final isTodo = attrs.containsKey(kTodoAttributeKey);
+
+        final panel = Material(
+          color: scheme.surfaceContainerHighest,
+          elevation: 0,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            height: 40,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: scheme.outlineVariant),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                iconBtn(Icons.format_bold, '加粗', () {
+                  controller.formatSelection(Attribute.bold);
+                  _editorFocusNode.requestFocus();
+                }, active: attrs.containsKey('bold')),
+                iconBtn(Icons.title, '标题', () {
+                  final active = attrs['header'] != null;
+                  controller.formatSelection(
+                      Attribute.clone(Attribute.header, active ? null : 2));
+                  _editorFocusNode.requestFocus();
+                }, active: attrs['header'] != null),
+                iconBtn(Icons.format_size, '字号：${sizeValue ?? '默认'}（点击切换）',
+                    () {
+                  final index = _fontSizes.indexOf(sizeValue ?? '');
+                  final next = _fontSizes[(index + 1) % _fontSizes.length];
+                  controller.formatSelection(
+                      Attribute.clone(Attribute.size, next));
+                  _editorFocusNode.requestFocus();
+                }, active: sizeValue != null),
+                if (sizeValue != null)
+                  Text(sizeValue,
+                      style: TextStyle(
+                          fontSize: 11, color: scheme.onSurfaceVariant)),
+                const SizedBox(width: 4),
+                for (final (value, swatch) in _highlights)
+                  GestureDetector(
+                    onTap: () {
+                      controller.formatSelection(
+                          Attribute.clone(Attribute.background, value));
+                      _editorFocusNode.requestFocus();
+                    },
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: value == null ? scheme.surface : swatch,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: background == value
+                              ? scheme.primary
+                              : scheme.outlineVariant,
+                          width: background == value ? 2 : 1,
+                        ),
+                      ),
+                      child: value == null
+                          ? Icon(Icons.block,
+                              size: 11, color: scheme.onSurfaceVariant)
+                          : null,
+                    ),
+                  ),
+                const SizedBox(width: 4),
+                iconBtn(
+                  isTodo ? Icons.task_alt : Icons.playlist_add_check,
+                  isTodo ? '取消待办' : '列为待办',
+                  visible
+                      ? () {
+                          final start = selection.start;
+                          final length = selection.end - selection.start;
+                          if (isTodo) {
+                            store.unmarkTodoSpan(project, start, length);
+                          } else {
+                            store.markTodoSpan(project, start, length);
+                          }
+                          _editorFocusNode.requestFocus();
+                        }
+                      : () {},
+                  active: isTodo,
+                ),
+              ],
+            ),
+          ),
+        );
+
+        return IgnorePointer(
+          ignoring: !visible,
+          child: AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: const Duration(milliseconds: 120),
+            child: panel,
+          ),
+        );
+      },
     );
   }
 
   // -------------------------------------------------------------- todo panel
 
-  /// Todo groups of one project, keyed by the nearest heading above them.
-  List<TodoGroup> _todoGroupsFor(Project project) {
+  /// Todo spans of one project, grouped by their section (nearest heading).
+  Map<String, List<TodoSpan>> _todoGroupsFor(Project project) {
     final ops = store.controllerFor(project).document.toDelta().toJson();
-    return groupTodos(parseDocLines(ops));
+    final groups = <String, List<TodoSpan>>{};
+    for (final span in parseTodoSpans(ops)) {
+      groups.putIfAbsent(span.section, () => []).add(span);
+    }
+    return groups;
   }
 
   Widget _buildTodoSection(BuildContext context) {
@@ -401,19 +513,19 @@ class _HomePageState extends State<HomePage> {
     final project = store.selected;
 
     // Groups of (header label, project, todos) depending on the scope.
-    final groups = <({String label, Project project, List<DocLine> todos})>[];
+    final groups = <({String label, Project project, List<TodoSpan> todos})>[];
     if (_todoShowAll) {
       for (final p in store.projects) {
         final todos = [
-          for (final group in _todoGroupsFor(p)) ...group.todos,
+          for (final group in _todoGroupsFor(p).entries) ...group.value,
         ];
         if (todos.isNotEmpty) {
           groups.add((label: p.name, project: p, todos: todos));
         }
       }
     } else if (project != null) {
-      for (final group in _todoGroupsFor(project)) {
-        groups.add((label: group.title, project: project, todos: group.todos));
+      for (final group in _todoGroupsFor(project).entries) {
+        groups.add((label: group.key, project: project, todos: group.value));
       }
     }
 
@@ -423,7 +535,7 @@ class _HomePageState extends State<HomePage> {
 
     final list = groups.isEmpty
         ? Center(
-            child: Text('在编辑板里选中行，点工具条的 ☑ 变成待办',
+            child: Text('在编辑板里划选一段文字，点浮动面板的 ☑ 列为待办',
                 style:
                     TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
           )
@@ -543,14 +655,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildTodoTile(BuildContext context, Project project, DocLine todo) {
+  Widget _buildTodoTile(BuildContext context, Project project, TodoSpan todo) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
         children: [
           GestureDetector(
-            onTap: () => store.toggleTodoDone(project, todo),
+            onTap: () => store.toggleSpanDone(project, todo),
             child: Icon(
               todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
               size: 17,
@@ -560,7 +672,7 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(width: 8),
           Expanded(
             child: GestureDetector(
-              onTap: () => _revealLine(project, todo),
+              onTap: () => _revealSpan(project, todo),
               child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 4, vertical: 3),

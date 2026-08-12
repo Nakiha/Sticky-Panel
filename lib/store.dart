@@ -171,35 +171,51 @@ class AppStore extends ChangeNotifier {
     _save();
   }
 
-  /// Flip a todo line between done and open.
-  ///
-  /// Note: Quill's line-format rule always extends the range to the next
-  /// newline, so passing [DocLine.length] (without the newline) formats
-  /// exactly this line; including the newline would also hit the next one.
-  void toggleTodoDone(Project project, DocLine line) {
+  /// Custom inline attribute marking a text span as a todo ('open'/'done').
+  static Attribute<String?> todoAttribute(String value) =>
+      Attribute(kTodoAttributeKey, AttributeScope.inline, value);
+
+  /// Mark the selected range as a todo: todo attribute + underline, so the
+  /// linked text stays visible in the document.
+  void markTodoSpan(Project project, int start, int length) {
+    final controller = controllerFor(project);
+    controller.formatText(start, length, todoAttribute('open'));
+    controller.formatText(start, length, Attribute.underline);
+  }
+
+  /// Remove the todo marking (and its underline/strike) from a range,
+  /// keeping the text itself.
+  void unmarkTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     controller.formatText(
-      line.start,
-      line.length,
-      line.done ? Attribute.unchecked : Attribute.checked,
+        start, length, Attribute.clone(todoAttribute('open'), null));
+    controller.formatText(
+        start, length, Attribute.clone(Attribute.underline, null));
+    controller.formatText(
+        start, length, Attribute.clone(Attribute.strikeThrough, null));
+  }
+
+  /// Flip a todo span between done and open.
+  void toggleSpanDone(Project project, TodoSpan span) {
+    final controller = controllerFor(project);
+    controller.formatText(
+        span.start, span.length, todoAttribute(span.done ? 'open' : 'done'));
+    controller.formatText(
+      span.start,
+      span.length,
+      span.done
+          ? Attribute.clone(Attribute.strikeThrough, null)
+          : Attribute.strikeThrough,
     );
   }
 
-  /// Remove all completed todo lines in a project, keeping notes untouched.
-  /// Lines are deleted from the end backwards so earlier offsets stay valid.
+  /// Unmark all completed todo spans in a project (the text stays on the
+  /// board, only the todo flag and its underline are removed).
   void clearDone(Project project) {
     final controller = controllerFor(project);
-    final lines = parseDocLines(controller.document.toDelta().toJson());
-    final doneLines = lines.where((l) => l.done).toList();
-    for (final line in doneLines.reversed) {
-      if (line.start + line.length + 1 < controller.document.length) {
-        controller.replaceText(line.start, line.length + 1, '', null);
-      } else {
-        // Last line of the document: the trailing newline must stay, so
-        // delete only the text and strip the checkbox from the empty line.
-        controller.replaceText(line.start, line.length, '', null);
-        controller.formatText(line.start, 1, Attribute.clone(Attribute.list, null));
-      }
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    for (final span in spans.where((s) => s.done).toList().reversed) {
+      unmarkTodoSpan(project, span.start, span.length);
     }
   }
 
