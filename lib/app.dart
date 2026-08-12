@@ -67,17 +67,45 @@ class _HomePageState extends State<HomePage> {
   bool _todoExpanded = false;
   bool _todoShowAll = false;
 
-  /// Shared by the editor across projects; the editor widget itself is
-  /// keyed by project id, so swapping controllers stays safe.
-  final _editorFocusNode = FocusNode();
-  final _editorScrollController = ScrollController();
+  /// One focus node / scroll controller per project: all editors stay alive
+  /// in an IndexedStack, so sharing a single ScrollController would attach
+  /// it to multiple scroll views and throw on every tab switch.
+  final _editorFocusNodes = <String, FocusNode>{};
+  final _editorScrollControllers = <String, ScrollController>{};
 
   AppStore get store => widget.store;
 
   @override
+  void initState() {
+    super.initState();
+    store.addListener(_pruneEditorAttachments);
+  }
+
+  FocusNode _focusFor(Project project) =>
+      _editorFocusNodes.putIfAbsent(project.id, FocusNode.new);
+
+  ScrollController _scrollFor(Project project) =>
+      _editorScrollControllers.putIfAbsent(project.id, ScrollController.new);
+
+  void _pruneEditorAttachments() {
+    final live = store.projects.map((p) => p.id).toSet();
+    for (final id in _editorFocusNodes.keys.where((id) => !live.contains(id)).toList()) {
+      _editorFocusNodes.remove(id)?.dispose();
+    }
+    for (final id in _editorScrollControllers.keys.where((id) => !live.contains(id)).toList()) {
+      _editorScrollControllers.remove(id)?.dispose();
+    }
+  }
+
+  @override
   void dispose() {
-    _editorFocusNode.dispose();
-    _editorScrollController.dispose();
+    store.removeListener(_pruneEditorAttachments);
+    for (final node in _editorFocusNodes.values) {
+      node.dispose();
+    }
+    for (final controller in _editorScrollControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -95,7 +123,7 @@ class _HomePageState extends State<HomePage> {
       store.selectProject(projectIndex);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _editorFocusNode.requestFocus();
+      _focusFor(project).requestFocus();
       final controller = store.controllerFor(project);
       controller.updateSelection(
         TextSelection(
@@ -104,9 +132,10 @@ class _HomePageState extends State<HomePage> {
       );
       // Best effort: nudge the selection into view once layout settles.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_editorScrollController.hasClients) {
-          _editorScrollController.animateTo(
-            _editorScrollController.position.maxScrollExtent,
+        final scroll = _scrollFor(project);
+        if (scroll.hasClients) {
+          scroll.animateTo(
+            scroll.position.maxScrollExtent,
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
           );
@@ -420,8 +449,8 @@ class _HomePageState extends State<HomePage> {
           child: QuillEditor(
             key: ValueKey(project.id),
             controller: store.controllerFor(project),
-            focusNode: _editorFocusNode,
-            scrollController: _editorScrollController,
+            focusNode: _focusFor(project),
+            scrollController: _scrollFor(project),
             config: QuillEditorConfig(
               placeholder: '随手记…',
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -496,13 +525,13 @@ class _HomePageState extends State<HomePage> {
               children: [
                 iconBtn(Icons.format_bold, '加粗', () {
                   controller.formatSelection(Attribute.bold);
-                  _editorFocusNode.requestFocus();
+                  _focusFor(project).requestFocus();
                 }, active: attrs.containsKey('bold')),
                 iconBtn(Icons.title, '标题', () {
                   final active = attrs['header'] != null;
                   controller.formatSelection(
                       Attribute.clone(Attribute.header, active ? null : 2));
-                  _editorFocusNode.requestFocus();
+                  _focusFor(project).requestFocus();
                 }, active: attrs['header'] != null),
                 iconBtn(Icons.format_size, '字号：${sizeValue ?? '默认'}（点击切换）',
                     () {
@@ -510,7 +539,7 @@ class _HomePageState extends State<HomePage> {
                   final next = _fontSizes[(index + 1) % _fontSizes.length];
                   controller.formatSelection(
                       Attribute.clone(Attribute.size, next));
-                  _editorFocusNode.requestFocus();
+                  _focusFor(project).requestFocus();
                 }, active: sizeValue != null),
                 if (sizeValue != null)
                   Text(sizeValue,
@@ -522,7 +551,7 @@ class _HomePageState extends State<HomePage> {
                     onTap: () {
                       controller.formatSelection(
                           Attribute.clone(Attribute.background, value));
-                      _editorFocusNode.requestFocus();
+                      _focusFor(project).requestFocus();
                     },
                     child: Container(
                       width: 18,
@@ -557,7 +586,7 @@ class _HomePageState extends State<HomePage> {
                           } else {
                             store.markTodoSpan(project, start, length);
                           }
-                          _editorFocusNode.requestFocus();
+                          _focusFor(project).requestFocus();
                         }
                       : () {},
                   active: isTodo,
