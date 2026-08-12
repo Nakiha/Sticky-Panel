@@ -248,6 +248,12 @@ class AppStore extends ChangeNotifier {
     _save();
   }
 
+  void setProjectColor(Project project, int colorValue) {
+    project.colorValue = colorValue;
+    notifyListeners();
+    _save();
+  }
+
   void deleteProject(Project project) {
     projects.remove(project);
     _controllers.remove(project.id)?.dispose();

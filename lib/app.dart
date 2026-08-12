@@ -121,78 +121,135 @@ class _HomePageState extends State<HomePage> {
       animation: store,
       builder: (context, _) {
         final project = store.selected;
-        return Scaffold(
-          body: Column(
-            children: [
-              _buildTitleBar(context),
-              _buildProjectBar(context),
-              const Divider(height: 1),
-              if (!_todoExpanded && project != null) ...[
-                Expanded(child: _buildEditor(context, project)),
-                const Divider(height: 1),
-              ],
-              _buildTodoSection(context),
-            ],
+        // Per-project theme color: override the accent for everything below.
+        final base = Theme.of(context);
+        final scheme = project == null || project.colorValue == 0
+            ? base.colorScheme
+            : base.colorScheme.copyWith(primary: Color(project.colorValue));
+        return Theme(
+          data: base.copyWith(colorScheme: scheme),
+          child: Builder(
+            builder: (context) => Scaffold(
+              body: Column(
+                children: [
+                  _buildTopBar(context),
+                  const Divider(height: 1),
+                  if (!_todoExpanded && project != null) ...[
+                    Expanded(child: _buildEditor(context, project)),
+                    const Divider(height: 1),
+                  ],
+                  _buildTodoSection(context),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
   }
 
-  // ---------------------------------------------------------------- title bar
+  // ------------------------------------------------------------------ top bar
 
-  Widget _buildTitleBar(BuildContext context) {
+  /// Single merged bar: project tabs + window actions, draggable anywhere.
+  Widget _buildTopBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      height: 38,
+      height: 44,
       color: scheme.surfaceContainerHighest,
-      child: Row(
-        children: [
-          // macOS keeps its native traffic lights with a hidden title bar.
-          if (_isMac) const SizedBox(width: 72) else const SizedBox(width: 12),
-          Expanded(
-            child: DragToMoveArea(
-              child: Text('Sticky Panel',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurfaceVariant)),
-            ),
-          ),
-          _titleBarIcon(
-            _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
-            _alwaysOnTop ? '取消置顶' : '窗口置顶',
-            _toggleAlwaysOnTop,
-            active: _alwaysOnTop,
-          ),
-          PopupMenuButton<String>(
-            icon: Icon(Icons.more_horiz,
-                size: 18, color: scheme.onSurfaceVariant),
-            tooltip: '更多',
-            onSelected: (value) {
-              if (value != 'clear_done') return;
-              if (_todoShowAll) {
-                for (final p in store.projects) {
-                  store.clearDone(p);
-                }
-              } else {
-                final project = store.selected;
-                if (project != null) store.clearDone(project);
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'clear_done',
-                child: Text('清除已完成待办', style: TextStyle(fontSize: 13)),
+      child: DragToMoveArea(
+        child: Row(
+          children: [
+            // macOS keeps its native traffic lights with a hidden title bar.
+            if (_isMac) const SizedBox(width: 72) else const SizedBox(width: 10),
+            Expanded(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: store.projects.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final project = store.projects[index];
+                  final selected = index == store.selectedIndex;
+                  final projectColor = project.colorValue == 0
+                      ? null
+                      : Color(project.colorValue);
+                  return Center(
+                    child: GestureDetector(
+                      onTap: () => store.selectProject(index),
+                      onLongPress: () => _showProjectMenu(context, project),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? (projectColor ?? scheme.primary)
+                              : scheme.surface,
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!selected && projectColor != null) ...[
+                              Icon(Icons.circle,
+                                  size: 7, color: projectColor),
+                              const SizedBox(width: 5),
+                            ],
+                            Text(
+                              project.name,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: selected
+                                    ? Colors.white
+                                    : scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
+            ),
+            IconButton(
+              tooltip: '新建项目',
+              icon: Icon(Icons.add, size: 19, color: scheme.onSurfaceVariant),
+              onPressed: () => _editProjectName(context, null),
+            ),
+            _titleBarIcon(
+              _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
+              _alwaysOnTop ? '取消置顶' : '窗口置顶',
+              _toggleAlwaysOnTop,
+              active: _alwaysOnTop,
+            ),
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_horiz,
+                  size: 18, color: scheme.onSurfaceVariant),
+              tooltip: '更多',
+              onSelected: (value) {
+                if (value != 'clear_done') return;
+                if (_todoShowAll) {
+                  for (final p in store.projects) {
+                    store.clearDone(p);
+                  }
+                } else {
+                  final project = store.selected;
+                  if (project != null) store.clearDone(project);
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'clear_done',
+                  child: Text('清除已完成待办', style: TextStyle(fontSize: 13)),
+                ),
+              ],
+            ),
+            if (!_isMac) ...[
+              _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
+              _titleBarIcon(Icons.close, '关闭', windowManager.close),
             ],
-          ),
-          if (!_isMac) ...[
-            _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
-            _titleBarIcon(Icons.close, '关闭', windowManager.close),
+            const SizedBox(width: 6),
           ],
-          const SizedBox(width: 6),
-        ],
+        ),
       ),
     );
   }
@@ -205,61 +262,6 @@ class _HomePageState extends State<HomePage> {
       icon: Icon(icon,
           size: 17, color: active ? scheme.primary : scheme.onSurfaceVariant),
       onPressed: onPressed,
-    );
-  }
-
-  // -------------------------------------------------------------- project bar
-
-  Widget _buildProjectBar(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 44,
-      child: Row(
-        children: [
-          const SizedBox(width: 12),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: store.projects.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final project = store.projects[index];
-                final selected = index == store.selectedIndex;
-                return Center(
-                  child: GestureDetector(
-                    onTap: () => store.selectProject(index),
-                    onLongPress: () => _showProjectMenu(context, project),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? scheme.primary
-                            : scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                      child: Text(
-                        project.name,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: selected
-                              ? Colors.white
-                              : scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          IconButton(
-            tooltip: '新建项目',
-            icon: Icon(Icons.add, size: 19, color: scheme.onSurfaceVariant),
-            onPressed: () => _editProjectName(context, null),
-          ),
-        ],
-      ),
     );
   }
 
@@ -281,6 +283,15 @@ class _HomePageState extends State<HomePage> {
             ),
             ListTile(
               dense: true,
+              leading: const Icon(Icons.palette_outlined),
+              title: const Text('主题色'),
+              onTap: () {
+                Navigator.pop(context);
+                _pickProjectColor(context, project);
+              },
+            ),
+            ListTile(
+              dense: true,
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: Text('删除「${project.name}」',
                   style: const TextStyle(color: Colors.red)),
@@ -289,6 +300,67 @@ class _HomePageState extends State<HomePage> {
                 store.deleteProject(project);
               },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Project theme color choices: 0 = default blue, then Apple accents.
+  static const _projectColors = <(int, String)>[
+    (0, '默认蓝'),
+    (0xFF34C759, '绿'),
+    (0xFFFF9500, '橙'),
+    (0xFFFF3B30, '红'),
+    (0xFFAF52DE, '紫'),
+    (0xFFFF2D55, '粉'),
+    (0xFF30B0C7, '青'),
+  ];
+
+  Future<void> _pickProjectColor(BuildContext context, Project project) async {
+    final scheme = Theme.of(context).colorScheme;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('项目主题色', style: TextStyle(fontSize: 15)),
+        content: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            for (final (value, label) in _projectColors)
+              GestureDetector(
+                onTap: () {
+                  store.setProjectColor(project, value);
+                  Navigator.pop(context);
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: value == 0 ? scheme.primary : Color(value),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: project.colorValue == value
+                              ? scheme.onSurface
+                              : Colors.transparent,
+                          width: 2.5,
+                        ),
+                      ),
+                      child: project.colorValue == value
+                          ? const Icon(Icons.check,
+                              size: 16, color: Colors.white)
+                          : null,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(label,
+                        style: TextStyle(
+                            fontSize: 11, color: scheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
