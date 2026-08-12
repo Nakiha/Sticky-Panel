@@ -108,12 +108,9 @@ List<TodoSpan> parseTodoSpans(List<dynamic> ops) {
         offset += part.length;
       }
       if (i < parts.length - 1) {
-        // Consumed a newline: a todo span may continue across lines, but a
-        // heading line renames the section for the following content.
-        if (isTodo && spanStart != null) {
-          spanLength += 1;
-          spanText.write('\n');
-        }
+        // A newline always ends a todo span; a heading line renames the
+        // section for the following content.
+        flushSpan();
         if (isHeader) {
           section =
               lineBuffer.isEmpty ? kUngroupedTitle : lineBuffer.toString();

@@ -33,7 +33,8 @@ class AppStore extends ChangeNotifier {
       try {
         document = project.docJson.isEmpty
             ? Document()
-            : Document.fromJson(jsonDecode(project.docJson) as List<dynamic>);
+            : Document.fromJson(_sanitizeOps(
+                jsonDecode(project.docJson) as List<dynamic>));
       } catch (_) {
         document = Document();
       }
@@ -44,6 +45,46 @@ class AppStore extends ChangeNotifier {
       controller.addListener(() => _onDocumentChanged(project, controller));
       return controller;
     });
+  }
+
+  /// Inline attributes (todo/underline/strike) must never sit on a newline
+  /// character: Quill treats the trailing `\n` as the line's format carrier,
+  /// so an underline there bleeds into everything typed afterwards. Split
+  /// ops so newline-only parts are stripped of inline attributes (line
+  /// attributes like `header`/`list` are kept).
+  static List<dynamic> _sanitizeOps(List<dynamic> ops) {
+    const inlineKeys = [kTodoAttributeKey, 'underline', 'strike'];
+    final cleaned = <dynamic>[];
+    for (final op in ops) {
+      if (op is! Map) {
+        cleaned.add(op);
+        continue;
+      }
+      final data = op['insert'];
+      final attributes = (op['attributes'] as Map?)?.cast<String, dynamic>();
+      if (data is! String ||
+          attributes == null ||
+          !attributes.keys.any(inlineKeys.contains) ||
+          !data.contains('\n')) {
+        cleaned.add(op);
+        continue;
+      }
+      final lineAttributes = Map<String, dynamic>.from(attributes)
+        ..removeWhere((key, _) => inlineKeys.contains(key));
+      final parts = data.split('\n');
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].isNotEmpty) {
+          cleaned.add({'insert': parts[i], 'attributes': attributes});
+        }
+        if (i < parts.length - 1) {
+          cleaned.add({
+            'insert': '\n',
+            if (lineAttributes.isNotEmpty) 'attributes': lineAttributes,
+          });
+        }
+      }
+    }
+    return cleaned;
   }
 
   void _onDocumentChanged(Project project, QuillController controller) {
@@ -175,16 +216,35 @@ class AppStore extends ChangeNotifier {
   static Attribute<String?> todoAttribute(String value) =>
       Attribute(kTodoAttributeKey, AttributeScope.inline, value);
 
+  /// Apply [attribute] to [start, start+length) one line segment at a time,
+  /// never touching newline characters (attributes on `\n` leak into text
+  /// typed afterwards).
+  static void _formatInlineSkippingNewlines(
+      QuillController controller, int start, int length, Attribute attribute) {
+    final plain = controller.document.toPlainText();
+    final end = start + length;
+    var i = start;
+    while (i < end) {
+      var j = plain.indexOf('\n', i);
+      if (j < 0 || j > end) j = end;
+      if (j > i) controller.formatText(i, j - i, attribute);
+      i = j + 1;
+    }
+  }
+
   /// Mark the selected range as a todo: todo attribute + underline, so the
   /// linked text stays visible in the document.
   void markTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
-    controller.formatText(start, length, todoAttribute('open'));
-    controller.formatText(start, length, Attribute.underline);
+    _formatInlineSkippingNewlines(
+        controller, start, length, todoAttribute('open'));
+    _formatInlineSkippingNewlines(
+        controller, start, length, Attribute.underline);
   }
 
   /// Remove the todo marking (and its underline/strike) from a range,
-  /// keeping the text itself.
+  /// keeping the text itself. Unlike marking, removal also targets newline
+  /// characters, so legacy pollution gets cleaned up too.
   void unmarkTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     controller.formatText(
@@ -198,9 +258,10 @@ class AppStore extends ChangeNotifier {
   /// Flip a todo span between done and open.
   void toggleSpanDone(Project project, TodoSpan span) {
     final controller = controllerFor(project);
-    controller.formatText(
-        span.start, span.length, todoAttribute(span.done ? 'open' : 'done'));
-    controller.formatText(
+    _formatInlineSkippingNewlines(controller, span.start, span.length,
+        todoAttribute(span.done ? 'open' : 'done'));
+    _formatInlineSkippingNewlines(
+      controller,
       span.start,
       span.length,
       span.done
