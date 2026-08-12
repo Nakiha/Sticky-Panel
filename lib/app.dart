@@ -1,23 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'models.dart';
 import 'store.dart';
-
-/// Highlight palette (marker-style, semi-opaque so it works on light/dark).
-const List<Color> kHighlightColors = [
-  Color(0x00000000), // none
-  Color(0x99FFD54F), // yellow
-  Color(0x99A5D6A7), // green
-  Color(0x9990CAF9), // blue
-  Color(0x99F48FB1), // pink
-  Color(0x99FFAB91), // orange
-];
-
-/// Font size presets cycled by the size button.
-const List<double> kFontSizes = [13, 15, 18, 22];
+import 'todos.dart';
 
 class StickyPanelApp extends StatelessWidget {
   const StickyPanelApp({super.key, required this.store});
@@ -31,6 +19,9 @@ class StickyPanelApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sticky Panel',
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        FlutterQuillLocalizations.delegate,
+      ],
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
@@ -75,72 +66,19 @@ class _HomePageState extends State<HomePage> {
   bool _alwaysOnTop = true;
   bool _todoExpanded = false;
   bool _todoShowAll = false;
-  String? _selectedEntryId;
 
-  /// One controller/focus node per board line, keyed by entry id, so the
-  /// board behaves like a continuous editor.
-  final _controllers = <String, TextEditingController>{};
-  final _focusNodes = <String, FocusNode>{};
+  /// Shared by the editor across projects; the editor widget itself is
+  /// keyed by project id, so swapping controllers stays safe.
+  final _editorFocusNode = FocusNode();
+  final _editorScrollController = ScrollController();
 
   AppStore get store => widget.store;
 
   @override
-  void initState() {
-    super.initState();
-    store.addListener(_pruneAttachments);
-  }
-
-  @override
   void dispose() {
-    store.removeListener(_pruneAttachments);
-    for (final c in _controllers.values) {
-      c.dispose();
-    }
-    for (final f in _focusNodes.values) {
-      f.dispose();
-    }
+    _editorFocusNode.dispose();
+    _editorScrollController.dispose();
     super.dispose();
-  }
-
-  /// Drop controllers/focus nodes whose entry no longer exists.
-  void _pruneAttachments() {
-    final live = <String>{
-      for (final p in store.projects) ...p.entries.map((e) => e.id),
-    };
-    for (final id in _controllers.keys.where((id) => !live.contains(id)).toList()) {
-      _controllers.remove(id)?.dispose();
-    }
-    for (final id in _focusNodes.keys.where((id) => !live.contains(id)).toList()) {
-      _focusNodes.remove(id)?.dispose();
-    }
-    if (_selectedEntryId != null && !live.contains(_selectedEntryId)) {
-      _selectedEntryId = null;
-    }
-  }
-
-  TextEditingController _controllerFor(Entry entry) =>
-      _controllers.putIfAbsent(entry.id, () => TextEditingController(text: entry.text));
-
-  FocusNode _focusNodeFor(Project project, Entry entry) {
-    return _focusNodes.putIfAbsent(entry.id, () {
-      final node = FocusNode();
-      node.addListener(() {
-        if (node.hasFocus && mounted && _selectedEntryId != entry.id) {
-          setState(() => _selectedEntryId = entry.id);
-        }
-      });
-      return node;
-    })
-      // Backspace on an empty line deletes it and moves focus up.
-      ..onKeyEvent = (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.backspace &&
-            (_controllers[entry.id]?.text.isEmpty ?? false)) {
-          _removeLine(project, entry);
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      };
   }
 
   Future<void> _toggleAlwaysOnTop() async {
@@ -149,48 +87,30 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  void _insertLineBelow(Project project, Entry? after) {
-    final entry = store.insertEntryAfter(project, after);
-    _controllerFor(entry);
-    _focusNodeFor(project, entry);
-    setState(() => _selectedEntryId = entry.id);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _focusNodes[entry.id]?.requestFocus();
-    });
-  }
-
-  void _removeLine(Project project, Entry entry) {
-    final index = project.entries.indexOf(entry);
-    final previous = index > 0 ? project.entries[index - 1] : null;
-    store.removeEntry(project, entry);
-    if (previous != null) {
-      setState(() => _selectedEntryId = previous.id);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _focusNodes[previous.id]?.requestFocus();
-        final c = _controllers[previous.id];
-        c?.selection = TextSelection.collapsed(offset: c.text.length);
-      });
-    }
-  }
-
-  /// Jump from a todo back to its source line on the board.
-  void _revealEntry(Project project, Entry entry) {
+  /// Jump from a todo back to its source line in the editor.
+  void _revealLine(Project project, DocLine line) {
     final projectIndex = store.projects.indexOf(project);
-    setState(() {
-      _todoExpanded = false;
-      _selectedEntryId = entry.id;
-    });
+    setState(() => _todoExpanded = false);
     if (projectIndex >= 0 && projectIndex != store.selectedIndex) {
       store.selectProject(projectIndex);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final node = _focusNodes[entry.id];
-      node?.requestFocus();
-      final ctx = node?.context;
-      if (ctx != null) {
-        Scrollable.ensureVisible(ctx,
-            duration: const Duration(milliseconds: 200));
-      }
+      _editorFocusNode.requestFocus();
+      final controller = store.controllerFor(project);
+      controller.updateSelection(
+        TextSelection.collapsed(offset: line.start),
+        ChangeSource.local,
+      );
+      // Best effort: nudge the caret into view once the editor has laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_editorScrollController.hasClients) {
+          _editorScrollController.animateTo(
+            _editorScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     });
   }
 
@@ -206,13 +126,12 @@ class _HomePageState extends State<HomePage> {
               _buildTitleBar(context),
               _buildProjectBar(context),
               const Divider(height: 1),
-              if (!_todoExpanded)
-                Expanded(
-                  child: project == null
-                      ? const SizedBox.shrink()
-                      : _buildBoard(context, project),
-                ),
-              const Divider(height: 1),
+              if (!_todoExpanded && project != null) ...[
+                _buildToolbar(context, project),
+                const Divider(height: 1),
+                Expanded(child: _buildEditor(context, project)),
+                const Divider(height: 1),
+              ],
               _buildTodoSection(context),
             ],
           ),
@@ -309,10 +228,7 @@ class _HomePageState extends State<HomePage> {
                 final selected = index == store.selectedIndex;
                 return Center(
                   child: GestureDetector(
-                    onTap: () {
-                      store.selectProject(index);
-                      setState(() => _selectedEntryId = null);
-                    },
+                    onTap: () => store.selectProject(index),
                     onLongPress: () => _showProjectMenu(context, project),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -413,242 +329,71 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // -------------------------------------------------------------------- board
+  // ------------------------------------------------------------ quill editor
 
-  TextStyle _entryStyle(Entry entry, ColorScheme scheme) {
-    final crossed = entry.isTodo && entry.done;
-    return TextStyle(
-      fontSize: entry.isHeading && entry.fontSize < 17 ? 18 : entry.fontSize,
-      fontWeight:
-          entry.bold || entry.isHeading ? FontWeight.w600 : FontWeight.normal,
-      decoration: crossed ? TextDecoration.lineThrough : null,
-      color: crossed ? scheme.onSurfaceVariant : scheme.onSurface,
-      height: 1.4,
-    );
-  }
-
-  Widget _buildBoard(BuildContext context, Project project) {
+  Widget _buildToolbar(BuildContext context, Project project) {
     final scheme = Theme.of(context).colorScheme;
-    if (project.entries.isEmpty) {
-      return Center(
-        child: GestureDetector(
-          onTap: () => _insertLineBelow(project, null),
-          child: Text(
-            '点这里开始写\n回车开新行，行首输入「# 」变标题',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
-          ),
-        ),
-      );
-    }
-
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-      itemCount: project.entries.length,
-      onReorderItem: (oldIndex, newIndex) =>
-          store.reorderEntry(project, oldIndex, newIndex),
-      footer: Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: GestureDetector(
-          onTap: () => _insertLineBelow(
-              project, project.entries.isEmpty ? null : project.entries.last),
-          child: Row(
-            children: [
-              Icon(Icons.add, size: 15, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 4),
-              Text('添加一行',
-                  style: TextStyle(
-                      fontSize: 12, color: scheme.onSurfaceVariant)),
-            ],
-          ),
-        ),
-      ),
-      itemBuilder: (context, index) {
-        final entry = project.entries[index];
-        return _buildBoardLine(context, project, entry, key: ValueKey(entry.id));
-      },
-    );
-  }
-
-  Widget _buildBoardLine(BuildContext context, Project project, Entry entry,
-      {required Key key}) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = entry.id == _selectedEntryId;
-
-    return Column(
-      key: key,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            if (entry.isTodo)
-              GestureDetector(
-                onTap: () => store.toggleDone(entry),
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: Icon(
-                    entry.done
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                    size: 17,
-                    color: entry.done
-                        ? scheme.onSurfaceVariant
-                        : scheme.primary,
-                  ),
-                ),
-              ),
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: entry.highlight == 0
-                      ? (selected
-                          ? scheme.surfaceContainerHighest
-                              .withValues(alpha: 0.5)
-                          : null)
-                      : Color(entry.highlight),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                child: TextField(
-                  controller: _controllerFor(entry),
-                  focusNode: _focusNodeFor(project, entry),
-                  style: _entryStyle(entry, scheme),
-                  cursorColor: scheme.primary,
-                  maxLines: null,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: entry.isHeading ? '标题' : null,
-                    hintStyle: TextStyle(color: scheme.onSurfaceVariant),
-                    contentPadding:
-                        const EdgeInsets.symmetric(vertical: 5),
-                  ),
-                  onChanged: (text) => _onLineChanged(project, entry, text),
-                  onSubmitted: (_) => _insertLineBelow(project, entry),
-                ),
-              ),
-            ),
-          ],
-        ),
-        if (selected) _buildLineToolbar(context, project, entry),
-      ],
-    );
-  }
-
-  void _onLineChanged(Project project, Entry entry, String text) {
-    // Markdown shortcut: a line starting with "# " becomes a heading.
-    if (!entry.isHeading && text.startsWith('# ')) {
-      final stripped = text.substring(2);
-      entry.text = stripped;
-      final controller = _controllers[entry.id];
-      controller?.value = TextEditingValue(
-        text: stripped,
-        selection: TextSelection.collapsed(offset: stripped.length),
-      );
-      store.setHeading(entry, true);
-      return;
-    }
-    entry.text = text;
-    store.persist();
-  }
-
-  Widget _buildLineToolbar(
-      BuildContext context, Project project, Entry entry) {
-    final scheme = Theme.of(context).colorScheme;
-    final sizeIndex =
-        kFontSizes.indexWhere((s) => (s - entry.fontSize).abs() < 0.1);
-
-    Widget iconBtn(IconData icon, String tooltip, VoidCallback onPressed,
-        {bool active = false}) {
-      return IconButton(
-        icon: Icon(icon, size: 17),
-        tooltip: tooltip,
-        visualDensity: VisualDensity.compact,
-        color: active ? scheme.primary : scheme.onSurfaceVariant,
-        onPressed: onPressed,
-      );
-    }
-
     return Container(
-      margin: const EdgeInsets.only(top: 2, bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
+      color: scheme.surfaceContainerHighest,
+      child: QuillSimpleToolbar(
+        controller: store.controllerFor(project),
+        config: const QuillSimpleToolbarConfig(
+          multiRowsDisplay: false,
+          showDividers: false,
+          showFontFamily: false,
+          showFontSize: true,
+          showBoldButton: true,
+          showItalicButton: false,
+          showUnderLineButton: false,
+          showStrikeThrough: false,
+          showInlineCode: false,
+          showColorButton: false,
+          showBackgroundColorButton: true,
+          showClearFormat: false,
+          showHeaderStyle: true,
+          showListNumbers: false,
+          showListBullets: false,
+          showListCheck: true,
+          showCodeBlock: false,
+          showQuote: false,
+          showIndent: false,
+          showLink: false,
+          showUndo: true,
+          showRedo: true,
+          showSearchButton: false,
+          showSubscript: false,
+          showSuperscript: false,
+        ),
       ),
-      child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          iconBtn(
-            entry.isTodo ? Icons.check_circle : Icons.check_circle_outline,
-            entry.isTodo ? '取消待办' : '拉出为待办',
-            () => store.toggleEntryKind(entry),
-            active: entry.isTodo,
-          ),
-          iconBtn(
-            Icons.title,
-            entry.isHeading ? '取消标题' : '设为标题',
-            () => store.setHeading(entry, !entry.isHeading),
-            active: entry.isHeading,
-          ),
-          iconBtn(Icons.format_bold, '加粗', () => store.toggleBold(entry),
-              active: entry.bold),
-          for (final color in kHighlightColors)
-            GestureDetector(
-              onTap: () => store.setHighlight(entry, color.toARGB32()),
-              child: Container(
-                width: 18,
-                height: 18,
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                decoration: BoxDecoration(
-                  color: color.toARGB32() == 0
-                      ? scheme.surface
-                      : color,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: entry.highlight == color.toARGB32()
-                        ? scheme.primary
-                        : scheme.outlineVariant,
-                    width: entry.highlight == color.toARGB32() ? 2 : 1,
-                  ),
-                ),
-                child: color.toARGB32() == 0
-                    ? Icon(Icons.block,
-                        size: 11, color: scheme.onSurfaceVariant)
-                    : null,
-              ),
-            ),
-          iconBtn(
-            Icons.format_size,
-            '字号：${entry.fontSize.toInt()}（点击切换）',
-            () {
-              final next = kFontSizes[(sizeIndex + 1) % kFontSizes.length];
-              store.setFontSize(entry, next);
-            },
-          ),
-          Text('${entry.fontSize.toInt()}',
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
-          iconBtn(Icons.delete_outline, '删除此行',
-              () => _removeLine(project, entry)),
-        ],
+    );
+  }
+
+  Widget _buildEditor(BuildContext context, Project project) {
+    final scheme = Theme.of(context).colorScheme;
+    // Quill derives its base text style from the ambient DefaultTextStyle,
+    // so this keeps the document readable in both light and dark mode.
+    return DefaultTextStyle(
+      style: TextStyle(fontSize: 14, height: 1.4, color: scheme.onSurface),
+      child: QuillEditor(
+        key: ValueKey(project.id),
+        controller: store.controllerFor(project),
+        focusNode: _editorFocusNode,
+        scrollController: _editorScrollController,
+        config: const QuillEditorConfig(
+          placeholder: '随手记…',
+          padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
+          expands: true,
+        ),
       ),
     );
   }
 
   // -------------------------------------------------------------- todo panel
 
-  /// Todos of one project, grouped by the heading they were pulled from.
-  /// Dart maps preserve insertion order, so groups follow board order.
-  Map<String, List<Entry>> _todoGroupsFor(Project project) {
-    final groups = <String, List<Entry>>{};
-    String section = '未分组';
-    for (final e in project.entries) {
-      if (e.isHeading) section = e.text.isEmpty ? '未命名段落' : e.text;
-      if (e.isTodo) groups.putIfAbsent(section, () => []).add(e);
-    }
-    return groups;
+  /// Todo groups of one project, keyed by the nearest heading above them.
+  List<TodoGroup> _todoGroupsFor(Project project) {
+    final ops = store.controllerFor(project).document.toDelta().toJson();
+    return groupTodos(parseDocLines(ops));
   }
 
   Widget _buildTodoSection(BuildContext context) {
@@ -656,18 +401,19 @@ class _HomePageState extends State<HomePage> {
     final project = store.selected;
 
     // Groups of (header label, project, todos) depending on the scope.
-    final groups = <({String label, Project project, List<Entry> todos})>[];
+    final groups = <({String label, Project project, List<DocLine> todos})>[];
     if (_todoShowAll) {
       for (final p in store.projects) {
-        final todos = p.entries.where((e) => e.isTodo).toList();
+        final todos = [
+          for (final group in _todoGroupsFor(p)) ...group.todos,
+        ];
         if (todos.isNotEmpty) {
           groups.add((label: p.name, project: p, todos: todos));
         }
       }
     } else if (project != null) {
-      for (final entry in _todoGroupsFor(project).entries) {
-        groups
-            .add((label: entry.key, project: project, todos: entry.value));
+      for (final group in _todoGroupsFor(project)) {
+        groups.add((label: group.title, project: project, todos: group.todos));
       }
     }
 
@@ -677,7 +423,7 @@ class _HomePageState extends State<HomePage> {
 
     final list = groups.isEmpty
         ? Center(
-            child: Text('在编辑板里把某行「拉出为待办」，会汇总到这里',
+            child: Text('在编辑板里选中行，点工具条的 ☑ 变成待办',
                 style:
                     TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
           )
@@ -797,14 +543,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildTodoTile(BuildContext context, Project project, Entry todo) {
+  Widget _buildTodoTile(BuildContext context, Project project, DocLine todo) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
         children: [
           GestureDetector(
-            onTap: () => store.toggleDone(todo),
+            onTap: () => store.toggleTodoDone(project, todo),
             child: Icon(
               todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
               size: 17,
@@ -814,20 +560,17 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(width: 8),
           Expanded(
             child: GestureDetector(
-              onTap: () => _revealEntry(project, todo),
+              onTap: () => _revealLine(project, todo),
               child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                 decoration: BoxDecoration(
-                  color: todo.highlight == 0 ? null : Color(todo.highlight),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
                   todo.text,
                   style: TextStyle(
                     fontSize: 14,
-                    fontWeight:
-                        todo.bold ? FontWeight.w600 : FontWeight.normal,
                     decoration:
                         todo.done ? TextDecoration.lineThrough : null,
                     color: todo.done
