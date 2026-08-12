@@ -133,9 +133,19 @@ class _HomePageState extends State<HomePage> {
               body: Column(
                 children: [
                   _buildTopBar(context),
-                  const Divider(height: 1),
                   if (!_todoExpanded && project != null) ...[
-                    Expanded(child: _buildEditor(context, project)),
+                    // Keep every project's editor alive so switching tabs
+                    // doesn't rebuild a whole QuillEditor (that was the
+                    // visible stutter when switching).
+                    Expanded(
+                      child: IndexedStack(
+                        index: store.selectedIndex,
+                        children: [
+                          for (final p in store.projects)
+                            _buildEditor(context, p),
+                        ],
+                      ),
+                    ),
                     const Divider(height: 1),
                   ],
                   _buildTodoSection(context),
@@ -150,69 +160,33 @@ class _HomePageState extends State<HomePage> {
 
   // ------------------------------------------------------------------ top bar
 
-  /// Single merged bar: project tabs + window actions, draggable anywhere.
+  /// Chrome-style tab strip: full-height tabs flush with the content below,
+  /// a trailing "+" tab, and only the pin button on the right. The whole
+  /// strip is draggable.
   Widget _buildTopBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      height: 44,
+      height: 36,
       color: scheme.surfaceContainerHighest,
       child: DragToMoveArea(
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // macOS keeps its native traffic lights with a hidden title bar.
-            if (_isMac) const SizedBox(width: 72) else const SizedBox(width: 10),
+            if (_isMac) const SizedBox(width: 72) else const SizedBox(width: 8),
             Expanded(
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: store.projects.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final project = store.projects[index];
-                  final selected = index == store.selectedIndex;
-                  final projectColor = project.colorValue == 0
-                      ? null
-                      : Color(project.colorValue);
-                  return Center(
-                    child: GestureDetector(
-                      onTap: () => store.selectProject(index),
-                      onLongPress: () => _showProjectMenu(context, project),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? (projectColor ?? scheme.primary)
-                              : scheme.surface,
-                          borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (!selected && projectColor != null) ...[
-                              Icon(Icons.circle,
-                                  size: 7, color: projectColor),
-                              const SizedBox(width: 5),
-                            ],
-                            Text(
-                              project.name,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: selected
-                                    ? Colors.white
-                                    : scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
+                separatorBuilder: (_, _) => const SizedBox(width: 2),
+                itemBuilder: (context, index) =>
+                    _buildTab(context, store.projects[index], index),
               ),
             ),
             IconButton(
               tooltip: '新建项目',
-              icon: Icon(Icons.add, size: 19, color: scheme.onSurfaceVariant),
+              icon: Icon(Icons.add, size: 17, color: scheme.onSurfaceVariant),
+              visualDensity: VisualDensity.compact,
               onPressed: () => _editProjectName(context, null),
             ),
             _titleBarIcon(
@@ -221,33 +195,54 @@ class _HomePageState extends State<HomePage> {
               _toggleAlwaysOnTop,
               active: _alwaysOnTop,
             ),
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_horiz,
-                  size: 18, color: scheme.onSurfaceVariant),
-              tooltip: '更多',
-              onSelected: (value) {
-                if (value != 'clear_done') return;
-                if (_todoShowAll) {
-                  for (final p in store.projects) {
-                    store.clearDone(p);
-                  }
-                } else {
-                  final project = store.selected;
-                  if (project != null) store.clearDone(project);
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'clear_done',
-                  child: Text('清除已完成待办', style: TextStyle(fontSize: 13)),
-                ),
-              ],
-            ),
             if (!_isMac) ...[
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
               _titleBarIcon(Icons.close, '关闭', windowManager.close),
             ],
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTab(BuildContext context, Project project, int index) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = index == store.selectedIndex;
+    final projectColor =
+        project.colorValue == 0 ? null : Color(project.colorValue);
+    return GestureDetector(
+      onTap: () => store.selectProject(index),
+      onLongPress: () => _showProjectMenu(context, project),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 140),
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          // The selected tab uses the content background color, so it reads
+          // as one surface with the editor below (Chrome-style).
+          color: selected ? scheme.surface : Colors.transparent,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (projectColor != null) ...[
+              Icon(Icons.circle, size: 7, color: projectColor),
+              const SizedBox(width: 5),
+            ],
+            Flexible(
+              child: Text(
+                project.name,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: selected
+                      ? scheme.onSurface
+                      : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -691,6 +686,22 @@ class _HomePageState extends State<HomePage> {
             _buildScopeToggle(context),
           ],
           const Spacer(),
+          IconButton(
+            tooltip: '清除已完成待办',
+            icon: Icon(Icons.done_all,
+                size: 17, color: scheme.onSurfaceVariant),
+            visualDensity: VisualDensity.compact,
+            onPressed: () {
+              if (_todoShowAll) {
+                for (final p in store.projects) {
+                  store.clearDone(p);
+                }
+              } else {
+                final project = store.selected;
+                if (project != null) store.clearDone(project);
+              }
+            },
+          ),
           IconButton(
             tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
             icon: Icon(
