@@ -1,0 +1,9 @@
+bin/
+obj/
+artifacts/
+.vs/
+*.user
+*.suo
+StickPanel.data.json
+StickPanel.data.json.tmp
+StickPanel.data.json.broken-*
