@@ -7,9 +7,12 @@ The original WinUI 3 version remains untouched on [`main`](https://github.com/Na
 ## Current features
 
 - Frameless, resizable, always-on-top panel
-- Native Windows Acrylic behind a custom Flutter surface
-- Free-form note plus editable checklist
+- Native Windows Acrylic with light, dark, and system themes
+- Editable list title, free-form note, and checklist
 - Completed items fade and receive a strikethrough
+- Live completion progress and four task priorities
+- Adjustable text size and regular, medium, or bold weight
+- Automatic Chinese or English localization with a manual override
 - Unicode, Chinese, Japanese, and emoji font fallback
 - Automatic portable JSON storage beside the executable
 - Window position, size, and pin state persistence
@@ -43,6 +46,7 @@ flutter build windows --release
 - Windows x64 is the supported release target for now.
 - Acrylic requires Windows 10 1803 or newer. The interface remains usable if the system falls back to a solid composition surface.
 - Running from a protected directory such as `Program Files` can prevent portable data writes. Extract to a user-writable folder.
+- Existing version 1 `StickPanel.data.json` files are migrated in place when new settings are saved.
 
 ## License
 
