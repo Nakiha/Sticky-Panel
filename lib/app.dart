@@ -95,6 +95,7 @@ class _HomePageState extends State<HomePage> {
     for (final id in _editorScrollControllers.keys.where((id) => !live.contains(id)).toList()) {
       _editorScrollControllers.remove(id)?.dispose();
     }
+    _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
   }
 
   @override
@@ -172,7 +173,7 @@ class _HomePageState extends State<HomePage> {
                         index: store.selectedIndex,
                         children: [
                           for (final p in store.projects)
-                            _buildEditor(context, p),
+                            _editorFor(context, p),
                         ],
                       ),
                     ),
@@ -202,7 +203,12 @@ class _HomePageState extends State<HomePage> {
     return Container(
       height: 36,
       color: scheme.surfaceContainerHighest,
-      child: DragToMoveArea(
+      // Custom drag area: window_manager's DragToMoveArea hardcodes a
+      // double-tap-to-maximize gesture, which also fired when clicking
+      // through tabs quickly. Maximize is left to the native controls.
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (_) => windowManager.startDragging(),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -220,7 +226,6 @@ class _HomePageState extends State<HomePage> {
             IconButton(
               tooltip: '新建项目',
               icon: Icon(Icons.add, size: 17, color: scheme.onSurfaceVariant),
-              visualDensity: VisualDensity.compact,
               onPressed: () => _editProjectName(context, null),
             ),
             _titleBarIcon(
@@ -257,7 +262,7 @@ class _HomePageState extends State<HomePage> {
         final sw = Stopwatch()..start();
         store.selectProject(index);
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          debugPrint('[perf] tab switch press->frame: ${sw.elapsedMilliseconds}ms');
+          debugPrint('[perf] press->frame: ${sw.elapsedMilliseconds}ms');
         });
       },
       onLongPress: () => _showProjectMenu(context, project),
@@ -307,7 +312,7 @@ class _HomePageState extends State<HomePage> {
                   style: const TextStyle(color: Colors.red)),
               onTap: () {
                 Navigator.pop(context);
-                store.deleteProject(project);
+                _confirmDeleteProject(context, project);
               },
             ),
           ],
@@ -377,6 +382,27 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _confirmDeleteProject(BuildContext context, Project project) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除项目', style: TextStyle(fontSize: 15)),
+        content: Text('确定删除「${project.name}」吗？里面的内容会一起删掉。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) store.deleteProject(project);
+  }
+
   Future<void> _editProjectName(BuildContext context, Project? project) async {
     final controller = TextEditingController(text: project?.name ?? '');
     final result = await showDialog<String>(
@@ -425,7 +451,10 @@ class _HomePageState extends State<HomePage> {
   static const _fontSizes = ['13', '15', '18', '22'];
 
   Widget _buildEditor(BuildContext context, Project project) {
-    final scheme = Theme.of(context).colorScheme;
+    final base = Theme.of(context);
+    final scheme = project.colorValue == 0
+        ? base.colorScheme
+        : base.colorScheme.copyWith(primary: Color(project.colorValue));
     // Quill derives its base text style from the ambient DefaultTextStyle,
     // so this keeps the document readable in both light and dark mode.
     return Stack(
@@ -468,6 +497,19 @@ class _HomePageState extends State<HomePage> {
         ),
       ],
     );
+  }
+
+  /// Editor widgets cached per project + theme inputs. A QuillEditor whose
+  /// config identity changes re-lays out its whole document, so rebuilding
+  /// one on every store notification (every keystroke, every tab switch)
+  /// was the real source of the lag. Reusing the identical widget instance
+  /// lets Flutter skip the update entirely.
+  final _editorCache = <String, Widget>{};
+
+  Widget _editorFor(BuildContext context, Project project) {
+    final brightness = Theme.of(context).brightness;
+    final key = '${project.id}|$brightness|${project.colorValue}';
+    return _editorCache.putIfAbsent(key, () => _buildEditor(context, project));
   }
 
   /// Floating rich-text mini panel that appears while text is selected.
@@ -776,6 +818,11 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildTodoTile(BuildContext context, Project project, TodoSpan todo) {
     final scheme = Theme.of(context).colorScheme;
+    // In the all-projects view each todo's checkbox follows its own
+    // project's theme color; the default blue applies when unset.
+    final accent = project.colorValue == 0
+        ? scheme.primary
+        : Color(project.colorValue);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
@@ -785,7 +832,7 @@ class _HomePageState extends State<HomePage> {
             child: Icon(
               todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
               size: 17,
-              color: todo.done ? scheme.onSurfaceVariant : scheme.primary,
+              color: todo.done ? scheme.onSurfaceVariant : accent,
             ),
           ),
           const SizedBox(width: 8),
@@ -866,38 +913,45 @@ class _ProjectTabState extends State<_ProjectTab> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTapDown: (_) {
+      // Act on the raw pointer event: DragToMoveArea registers a double-tap
+      // recognizer (double-click to maximize), which holds the gesture arena
+      // for the ~300ms double-tap timeout before TapGestureRecognizer
+      // callbacks fire. Listener bypasses the arena entirely.
+      child: Listener(
+        onPointerDown: (_) {
           setState(() => _pressed = true);
           widget.onPressed();
         },
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        onLongPress: widget.onLongPress,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          constraints: const BoxConstraints(maxWidth: 140),
-          margin: const EdgeInsets.only(top: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.projectColor != null) ...[
-                Icon(Icons.circle, size: 7, color: widget.projectColor),
-                const SizedBox(width: 5),
-              ],
-              Flexible(
-                child: Text(
-                  widget.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: widget.textColor),
+        onPointerUp: (_) => setState(() => _pressed = false),
+        onPointerCancel: (_) => setState(() => _pressed = false),
+        child: GestureDetector(
+          onLongPress: widget.onLongPress,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            constraints: const BoxConstraints(maxWidth: 140),
+            margin: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(8)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.projectColor != null) ...[
+                  Icon(Icons.circle, size: 7, color: widget.projectColor),
+                  const SizedBox(width: 5),
+                ],
+                Flexible(
+                  child: Text(
+                    widget.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: widget.textColor),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
