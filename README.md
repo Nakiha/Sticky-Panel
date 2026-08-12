@@ -1,55 +1,37 @@
-# Stick Panel
+# Sticky Panel
 
-A small, modern, always-on-top checklist for Windows. It is built with native
-WinUI 3, follows the system light/dark theme, supports Unicode and emoji, and
-saves everything beside the executable.
+一个轻量的置顶备忘 + 待办面板，用 Flutter 构建，支持 macOS 和 Windows。
 
-## Features
+## 理念
 
-- Native Windows 11 acrylic backdrop and per-monitor DPI support
-- Editable checklist with completed-task state and quick cleanup
-- Always-on-top toggle (`Ctrl+Shift+A`)
-- Automatic, atomic JSON saves beside `StickPanel.exe`
-- Window position and size restoration across displays
-- Portable, unpackaged, self-contained single-file EXE
-- x64 and ARM64 builds from GitHub Actions
+备忘和待办不分家。所有行都写在同一个列表里——随手记的是备忘，点一下工具栏
+就能原地变成待办（打勾项），不用再单独维护一个 todo 列表。
 
-## Download
+## 功能
 
-Open the repository's **Actions** tab, choose the latest successful
-**Build portable EXE** run, and download `StickPanel-win-x64`. Tagged builds
-are also attached to GitHub Releases.
+- 窗口置顶（可开关），小巧窗口随手可及
+- 多项目切换：顶部项目标签，长按可重命名/删除
+- 混合列表：备忘行和待办行混在一起，可互相转换，可拖拽排序
+- 每行独立样式：加粗、底色高亮（5 色）、字号（13/15/18/22 循环）
+- 待办行自动编号，完成后划线，可一键清除已完成
+- 数据自动保存在本地（shared_preferences）
 
-The first launch can take a little longer because the self-contained WinUI 3
-runtime is extracted to a temporary directory. No installer or separately
-installed Windows App SDK runtime is required.
+## 使用
 
-## Keyboard shortcuts
+- 底部输入框回车添加一行；左侧图标切换"新增为备忘 / 新增为待办"
+- 点一行选中它，出现样式工具条；再点一次进入编辑
+- 编辑框留空提交会删除该行
+- 右侧拖拽手柄可调整顺序
 
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+Enter` | Focus the new-task box |
-| `Ctrl+Shift+A` | Toggle always on top |
-| `Ctrl+S` | Save immediately |
-| `Enter` in a task | Focus the new-task box |
-| `Shift+Enter` in a task | Insert a new line |
+## 运行（macOS）
 
-## Local build
-
-Requirements: Windows 10 1809 or later and the .NET 10 SDK.
-
-```powershell
-dotnet publish src/StickPanel/StickPanel.csproj `
-  -c Release -r win-x64 --self-contained true `
-  -p:Platform=x64 -p:PublishSingleFile=true
+```sh
+flutter pub get
+flutter run -d macos
 ```
 
-## Data
+## Windows 构建
 
-`StickPanel.data.json` is created next to the EXE. Keep the executable in a
-writable folder if you want fully portable behavior. A malformed JSON file is
-preserved with a `.broken-<timestamp>` suffix before a fresh state is created.
-
-## License
-
-MIT
+Windows 安装包由 GitHub Actions 构建：推送到 `main` 分支（或在 Actions 页
+手动触发 `build-windows`），构建完成后在运行产物里下载
+`sticky-panel-windows-x64`，解压后运行 `sticky_panel.exe`。
