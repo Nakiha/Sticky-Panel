@@ -47,13 +47,12 @@ class AppStore extends ChangeNotifier {
     });
   }
 
-  /// Inline attributes (todo/underline/strike) must never sit on a newline
-  /// character: Quill treats the trailing `\n` as the line's format carrier,
-  /// so an underline there bleeds into everything typed afterwards. Split
-  /// ops so newline-only parts are stripped of inline attributes (line
-  /// attributes like `header`/`list` are kept).
+  /// Inline attributes must never sit on a newline character: Quill carries
+  /// line format on the trailing `\n`, so an attribute there leaks into
+  /// everything typed afterwards. Legacy `underline`/`strike` attributes
+  /// (no longer stored; the todo underline is derived at render time) are
+  /// stripped everywhere, and the todo attribute is stripped from newlines.
   static List<dynamic> _sanitizeOps(List<dynamic> ops) {
-    const inlineKeys = [kTodoAttributeKey, 'underline', 'strike'];
     final cleaned = <dynamic>[];
     for (final op in ops) {
       if (op is! Map) {
@@ -61,16 +60,27 @@ class AppStore extends ChangeNotifier {
         continue;
       }
       final data = op['insert'];
-      final attributes = (op['attributes'] as Map?)?.cast<String, dynamic>();
-      if (data is! String ||
-          attributes == null ||
-          !attributes.keys.any(inlineKeys.contains) ||
-          !data.contains('\n')) {
+      var attributes = (op['attributes'] as Map?)?.cast<String, dynamic>();
+      if (data is! String || attributes == null) {
         cleaned.add(op);
         continue;
       }
+      // underline/strike are never stored anymore — drop them outright.
+      attributes = Map<String, dynamic>.from(attributes)
+        ..remove('underline')
+        ..remove('strike');
+      if (attributes.isEmpty) attributes = null;
+      if (attributes == null ||
+          !attributes.containsKey(kTodoAttributeKey) ||
+          !data.contains('\n')) {
+        cleaned.add({
+          'insert': data,
+          'attributes': ?attributes,
+        });
+        continue;
+      }
       final lineAttributes = Map<String, dynamic>.from(attributes)
-        ..removeWhere((key, _) => inlineKeys.contains(key));
+        ..remove(kTodoAttributeKey);
       final parts = data.split('\n');
       for (var i = 0; i < parts.length; i++) {
         if (parts[i].isNotEmpty) {
@@ -87,13 +97,50 @@ class AppStore extends ChangeNotifier {
     return cleaned;
   }
 
+  bool _sanitizing = false;
+
   void _onDocumentChanged(Project project, QuillController controller) {
+    if (_sanitizing) return;
+    // Pressing Enter at the end of a todo span copies the todo attribute
+    // onto the new newline, and the next line then inherits it. Strip the
+    // todo attribute from newline characters on every change.
+    _stripTodoFromNewlines(controller);
     final docJson = jsonEncode(controller.document.toDelta().toJson());
     // Selection-only changes notify too; skip those to avoid churn.
     if (docJson == project.docJson) return;
     project.docJson = docJson;
     notifyListeners();
     _save();
+  }
+
+  void _stripTodoFromNewlines(QuillController controller) {
+    final ops = controller.document.toDelta().toJson();
+    final positions = <int>[];
+    var offset = 0;
+    for (final op in ops) {
+      final data = op['insert'];
+      if (data is! String) {
+        if (data != null) offset += 1;
+        continue;
+      }
+      final attributes = op['attributes']?.cast<String, dynamic>();
+      if (attributes != null && attributes.containsKey(kTodoAttributeKey)) {
+        for (var i = 0; i < data.length; i++) {
+          if (data[i] == '\n') positions.add(offset + i);
+        }
+      }
+      offset += data.length;
+    }
+    if (positions.isEmpty) return;
+    _sanitizing = true;
+    try {
+      for (final pos in positions.reversed) {
+        controller.formatText(
+            pos, 1, Attribute.clone(todoAttribute('open'), null));
+      }
+    } finally {
+      _sanitizing = false;
+    }
   }
 
   Future<void> load() async {
@@ -232,19 +279,17 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// Mark the selected range as a todo: todo attribute + underline, so the
-  /// linked text stays visible in the document.
+  /// Mark the selected range as a todo. The underline is NOT stored — it is
+  /// derived from the todo attribute at render time (customStyleBuilder),
+  /// so there is no real underline attribute that could leak.
   void markTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     _formatInlineSkippingNewlines(
         controller, start, length, todoAttribute('open'));
-    _formatInlineSkippingNewlines(
-        controller, start, length, Attribute.underline);
   }
 
-  /// Remove the todo marking (and its underline/strike) from a range,
-  /// keeping the text itself. Unlike marking, removal also targets newline
-  /// characters, so legacy pollution gets cleaned up too.
+  /// Remove the todo marking from a range, keeping the text itself. Also
+  /// strips legacy stored underline/strike attributes.
   void unmarkTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     controller.formatText(
@@ -260,14 +305,6 @@ class AppStore extends ChangeNotifier {
     final controller = controllerFor(project);
     _formatInlineSkippingNewlines(controller, span.start, span.length,
         todoAttribute(span.done ? 'open' : 'done'));
-    _formatInlineSkippingNewlines(
-      controller,
-      span.start,
-      span.length,
-      span.done
-          ? Attribute.clone(Attribute.strikeThrough, null)
-          : Attribute.strikeThrough,
-    );
   }
 
   /// Unmark all completed todo spans in a project (the text stays on the

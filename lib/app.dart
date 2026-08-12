@@ -355,10 +355,26 @@ class _HomePageState extends State<HomePage> {
             controller: store.controllerFor(project),
             focusNode: _editorFocusNode,
             scrollController: _editorScrollController,
-            config: const QuillEditorConfig(
+            config: QuillEditorConfig(
               placeholder: '随手记…',
-              padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
               expands: true,
+              // The todo underline is derived from the custom `todo`
+              // attribute instead of a stored underline attribute, so the
+              // visual marker can never leak into neighbouring text.
+              customStyleBuilder: (attribute) {
+                if (attribute.key != kTodoAttributeKey) {
+                  return const TextStyle();
+                }
+                final done = attribute.value == 'done';
+                return TextStyle(
+                  decoration: done
+                      ? TextDecoration.lineThrough
+                      : TextDecoration.underline,
+                  decorationColor: scheme.primary,
+                  color: done ? scheme.onSurfaceVariant : null,
+                );
+              },
             ),
           ),
         ),
