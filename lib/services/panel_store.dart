@@ -31,7 +31,7 @@ class PanelStore {
   Future<void> save(PanelState state) async {
     await _file.parent.create(recursive: true);
     final temporary = File('${_file.path}.tmp');
-    final encoder = const JsonEncoder.withIndent('  ');
+    const encoder = JsonEncoder.withIndent('  ');
     await temporary.writeAsString(encoder.convert(state.toJson()), flush: true);
 
     if (await _file.exists()) {
