@@ -462,6 +462,27 @@ void main() {
     expect(doneStyle.color, scheme.onSurfaceVariant);
   });
 
+  testWidgets('editor caret is neutral while selection keeps project accent', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    store.setProjectColor(store.selected!, 0xFF34C759);
+    await tester.pumpAndSettle();
+
+    final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
+    final selectionTheme = editor.config.textSelectionThemeData!;
+    final scheme = Theme.of(
+      tester.element(find.byType(QuillEditor)),
+    ).colorScheme;
+
+    expect(selectionTheme.cursorColor, scheme.onSurface);
+    expect(
+      selectionTheme.selectionColor,
+      scheme.primary.withValues(alpha: 0.32),
+    );
+    expect(selectionTheme.selectionHandleColor, const Color(0xFF34C759));
+  });
+
   testWidgets('todo header gives visual feedback on hover', (tester) async {
     await pumpTodoApp(tester);
     final header = find.byKey(const ValueKey('todo-header'));

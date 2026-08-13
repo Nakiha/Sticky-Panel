@@ -1,0 +1,68 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill" : "none",
+          "glass" : false,
+          "image-name" : "03-pin-and-ink.svg",
+          "name" : "Pin and Ink"
+        }
+      ],
+      "name" : "03 Pin and Ink",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.3
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.16
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill" : "none",
+          "image-name" : "02-note.svg",
+          "name" : "Note Sheet"
+        }
+      ],
+      "name" : "02 Note Sheet",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.4
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.12
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill" : "none",
+          "image-name" : "01-panel.svg",
+          "name" : "Rear Panel"
+        }
+      ],
+      "name" : "01 Rear Panel",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.35
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.22
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

@@ -1077,6 +1077,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
               scrollController: _scrollFor(project),
               config: QuillEditorConfig(
                 editorKey: _editorKeyFor(project),
+                // Keep the insertion caret neutral like the document text.
+                // Project accents still identify selections and todo marks,
+                // without turning the writing cursor into another theme mark.
+                textSelectionThemeData: TextSelectionThemeData(
+                  cursorColor: scheme.onSurface,
+                  selectionColor: scheme.primary.withValues(alpha: 0.32),
+                  selectionHandleColor: scheme.primary,
+                ),
                 placeholder: '随手记…',
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 expands: true,
