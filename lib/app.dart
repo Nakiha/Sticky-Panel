@@ -1,13 +1,23 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'models.dart';
 import 'store.dart';
 import 'todos.dart';
+import 'widgets/app_menu_combo.dart';
 
 typedef _TodoGroup = ({String label, Project project, List<TodoSpan> todos});
+typedef _TodoTileIdentity = ({
+  String projectId,
+  String section,
+  String text,
+  int occurrence,
+});
+typedef _KeyedTodo = ({TodoSpan todo, _TodoTileIdentity key});
 
 class StickyPanelApp extends StatelessWidget {
   const StickyPanelApp({super.key, required this.store});
@@ -21,8 +31,16 @@ class StickyPanelApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sticky Panel',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
       localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
         FlutterQuillLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('zh', 'CN'),
+        Locale('en', 'US'),
       ],
       theme: ThemeData(
         useMaterial3: true,
@@ -67,18 +85,27 @@ class _HomePageState extends State<HomePage> with WindowListener {
   static const double _todoHeaderHeight = 40;
   static const double _defaultTodoPanelHeight = 180;
   static const double _todoTextSize = 14;
+  static const Locale _editorLocale = Locale('zh', 'CN');
+  static const List<String> _editorFontFallbacks = [
+    'Microsoft YaHei UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Noto Sans CJK SC',
+    'Noto Sans SC',
+  ];
   static const Duration _panelMotion = Duration(milliseconds: 240);
   static const Duration _todoMotion = Duration(milliseconds: 180);
 
   bool _alwaysOnTop = true;
   bool _todoExpanded = false;
   bool _todoShowAll = false;
+  bool _todoHeaderHovered = false;
   bool _resizingTodoPanel = false;
   bool _closeDialogOpen = false;
   bool _clearingDone = false;
   double _todoPanelHeight = _defaultTodoPanelHeight;
   double _todoHeightBeforeExpand = _defaultTodoPanelHeight;
-  final Set<String> _dismissingTodos = {};
+  final Set<_TodoTileIdentity> _dismissingTodos = {};
 
   /// One focus node / scroll controller per project: all editors stay alive
   /// in an IndexedStack, so sharing a single ScrollController would attach
@@ -316,7 +343,12 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ),
             if (!_isMac) ...[
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
-              _titleBarIcon(Icons.close, '关闭', _requestClose),
+              _titleBarIcon(
+                Icons.close,
+                '关闭',
+                _requestClose,
+                danger: true,
+              ),
             ],
             const SizedBox(width: 4),
           ],
@@ -349,13 +381,41 @@ class _HomePageState extends State<HomePage> with WindowListener {
     );
   }
 
-  Widget _titleBarIcon(IconData icon, String tooltip, VoidCallback onPressed,
-      {bool active = false}) {
+  Widget _titleBarIcon(
+    IconData icon,
+    String tooltip,
+    VoidCallback onPressed, {
+    bool active = false,
+    bool danger = false,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return IconButton(
       tooltip: tooltip,
-      icon: Icon(icon,
-          size: 17, color: active ? scheme.primary : scheme.onSurfaceVariant),
+      icon: Icon(icon, size: 17),
+      style: ButtonStyle(
+        fixedSize: const WidgetStatePropertyAll(Size(40, 36)),
+        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+        shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
+        foregroundColor: WidgetStateProperty.resolveWith((states) {
+          if (danger &&
+              (states.contains(WidgetState.hovered) ||
+                  states.contains(WidgetState.pressed))) {
+            return Colors.white;
+          }
+          return active ? scheme.primary : scheme.onSurfaceVariant;
+        }),
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (!danger) return Colors.transparent;
+          if (states.contains(WidgetState.pressed)) {
+            return const Color(0xFFC50F1F);
+          }
+          if (states.contains(WidgetState.hovered)) {
+            return const Color(0xFFE81123);
+          }
+          return Colors.transparent;
+        }),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      ),
       onPressed: onPressed,
     );
   }
@@ -528,7 +588,78 @@ class _HomePageState extends State<HomePage> with WindowListener {
     ('rgba(255,171,145,0.55)', Color(0xFFFFAB91)),
   ];
 
-  static const _fontSizes = ['13', '15', '18', '22'];
+  static const _textColors = <(String?, Color)>[
+    (null, Colors.transparent),
+    ('#FF3B30', Color(0xFFFF3B30)),
+    ('#FF9500', Color(0xFFFF9500)),
+    ('#FFCC00', Color(0xFFFFCC00)),
+    ('#34C759', Color(0xFF34C759)),
+    ('#00C7BE', Color(0xFF00C7BE)),
+    ('#0A84FF', Color(0xFF0A84FF)),
+    ('#BF5AF2', Color(0xFFBF5AF2)),
+    ('#FFFFFF', Color(0xFFFFFFFF)),
+    ('#000000', Color(0xFF000000)),
+  ];
+
+  static const _fontSizes = <String?>[null, '13', '15', '18', '22'];
+
+  /// Flutter's stock Windows selection menu uses 36px rows with asymmetric
+  /// text padding. Keep Quill's real clipboard callbacks, but render them in
+  /// a denser desktop menu that matches this compact app.
+  Widget _buildEditorContextMenu(
+    BuildContext context,
+    QuillRawEditorState state,
+  ) {
+    if (Theme.of(context).platform != TargetPlatform.windows) {
+      return TextFieldTapRegion(
+        child: AdaptiveTextSelectionToolbar.buttonItems(
+          buttonItems: state.contextMenuButtonItems,
+          anchors: state.contextMenuAnchors,
+        ),
+      );
+    }
+
+    final scheme = Theme.of(context).colorScheme;
+    final buttons = state.contextMenuButtonItems;
+    if (buttons.isEmpty) return const SizedBox.shrink();
+    return TextFieldTapRegion(
+      child: DesktopTextSelectionToolbar(
+        anchor: state.contextMenuAnchors.primaryAnchor,
+        children: [
+          for (final button in buttons)
+            SizedBox(
+              height: 32,
+              width: double.infinity,
+              child: TextButton(
+                style: ButtonStyle(
+                  alignment: Alignment.centerLeft,
+                  minimumSize:
+                      const WidgetStatePropertyAll(Size(0, 32)),
+                  padding: const WidgetStatePropertyAll(
+                    EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  shape: const WidgetStatePropertyAll(
+                    RoundedRectangleBorder(),
+                  ),
+                  foregroundColor:
+                      WidgetStatePropertyAll(scheme.onSurface),
+                  textStyle: const WidgetStatePropertyAll(
+                    TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+                  ),
+                ),
+                onPressed: button.onPressed,
+                child: Text(
+                  AdaptiveTextSelectionToolbar.getButtonLabel(
+                    context,
+                    button,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildEditor(BuildContext context, Project project) {
     final base = Theme.of(context);
@@ -540,7 +671,22 @@ class _HomePageState extends State<HomePage> with WindowListener {
     return Stack(
       children: [
         DefaultTextStyle(
-          style: TextStyle(fontSize: 14, height: 1.4, color: scheme.onSurface),
+          key: ValueKey('editor-text-style-${project.id}'),
+          // Segoe UI contains some CJK punctuation but not the surrounding
+          // ideographs. Without a Chinese locale/font preference, Windows can
+          // select different glyph families at Quill span boundaries, making
+          // the same full-width comma or period jump from the baseline to the
+          // vertical centre. Keep one CJK glyph family throughout the editor.
+          style: TextStyle(
+            fontSize: 14,
+            height: 1.4,
+            color: scheme.onSurface,
+            locale: _editorLocale,
+            fontFamily: defaultTargetPlatform == TargetPlatform.windows
+                ? 'Microsoft YaHei UI'
+                : null,
+            fontFamilyFallback: _editorFontFallbacks,
+          ),
           child: QuillEditor(
             key: ValueKey(project.id),
             controller: store.controllerFor(project),
@@ -550,6 +696,18 @@ class _HomePageState extends State<HomePage> with WindowListener {
               placeholder: '随手记…',
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
               expands: true,
+              contextMenuBuilder: _buildEditorContextMenu,
+              // Explicitly register the desktop paste accelerator. Quill also
+              // inherits Flutter's editing shortcuts, but this local mapping
+              // keeps Ctrl/Cmd+V working even when another Actions scope is
+              // introduced around the panel.
+              customShortcuts: {
+                SingleActivator(
+                  LogicalKeyboardKey.keyV,
+                  control: !_isMac,
+                  meta: _isMac,
+                ): const PasteTextIntent(SelectionChangedCause.keyboard),
+              },
               // The todo underline is derived from the custom `todo`
               // attribute instead of a stored underline attribute, so the
               // visual marker can never leak into neighbouring text.
@@ -615,6 +773,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
         }
 
         final sizeValue = attrs['size']?.value?.toString();
+        final textColor = attrs['color']?.value?.toString();
         final background = attrs['background']?.value?.toString();
         final isTodo = attrs.containsKey(kTodoAttributeKey);
 
@@ -641,46 +800,147 @@ class _HomePageState extends State<HomePage> with WindowListener {
                       Attribute.clone(Attribute.header, active ? null : 2));
                   _focusFor(project).requestFocus();
                 }, active: attrs['header'] != null),
-                iconBtn(Icons.format_size, '字号：${sizeValue ?? '默认'}（点击切换）',
-                    () {
-                  final index = _fontSizes.indexOf(sizeValue ?? '');
-                  final next = _fontSizes[(index + 1) % _fontSizes.length];
-                  controller.formatSelection(
-                      Attribute.clone(Attribute.size, next));
-                  _focusFor(project).requestFocus();
-                }, active: sizeValue != null),
-                if (sizeValue != null)
-                  Text(sizeValue,
-                      style: TextStyle(
-                          fontSize: 11, color: scheme.onSurfaceVariant)),
-                const SizedBox(width: 4),
-                for (final (value, swatch) in _highlights)
-                  GestureDetector(
-                    onTap: () {
+                Tooltip(
+                  message: '字号',
+                  child: AppMenuCombo<String?>(
+                    key: const ValueKey('font-size-combo'),
+                    width: 52,
+                    height: 30,
+                    value: sizeValue,
+                    items: _fontSizes,
+                    labelFor: (size) => size ?? '默认',
+                    onChanged: (size) {
                       controller.formatSelection(
-                          Attribute.clone(Attribute.background, value));
+                        Attribute.clone(Attribute.size, size),
+                      );
                       _focusFor(project).requestFocus();
                     },
-                    child: Container(
-                      width: 18,
-                      height: 18,
-                      margin: const EdgeInsets.symmetric(horizontal: 3),
-                      decoration: BoxDecoration(
-                        color: value == null ? scheme.surface : swatch,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: background == value
-                              ? scheme.primary
-                              : scheme.outlineVariant,
-                          width: background == value ? 2 : 1,
+                    textStyle: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    menuTextStyle: const TextStyle(fontSize: 12),
+                    maxMenuWidth: 88,
+                    itemHeight: 30,
+                    buttonPadding: const EdgeInsets.only(left: 6, right: 2),
+                    itemPadding:
+                        const EdgeInsets.only(left: 10, right: 12),
+                    borderRadius: BorderRadius.circular(4),
+                    backgroundColor: Colors.transparent,
+                    foregroundColor: scheme.onSurfaceVariant,
+                    iconSize: 15,
+                  ),
+                ),
+                const SizedBox(width: 3),
+                Tooltip(
+                  message: '文字颜色',
+                  child: AppMenuCombo<(String?, Color)>(
+                    key: const ValueKey('text-color-combo'),
+                    width: 44,
+                    height: 30,
+                    value: _textColors.firstWhere(
+                      (option) => option.$1 == textColor,
+                      orElse: () => _textColors.first,
+                    ),
+                    items: _textColors,
+                    labelFor: (option) => _textColorLabel(option.$1),
+                    onChanged: (option) {
+                      controller.formatSelection(
+                        Attribute.clone(Attribute.color, option.$1),
+                      );
+                      _focusFor(project).requestFocus();
+                    },
+                    minMenuWidth: 118,
+                    maxMenuWidth: 148,
+                    itemHeight: 30,
+                    buttonPadding: const EdgeInsets.only(left: 6, right: 2),
+                    itemPadding:
+                        const EdgeInsets.only(left: 10, right: 12),
+                    borderRadius: BorderRadius.circular(4),
+                    backgroundColor: Colors.transparent,
+                    foregroundColor: scheme.onSurfaceVariant,
+                    iconSize: 15,
+                    showSelectedCheck: false,
+                    buttonBuilder: (context, option, open) => Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _SelectionTextColorIndicator(
+                          value: option.$1,
+                          color: option.$2,
                         ),
-                      ),
-                      child: value == null
-                          ? Icon(Icons.block,
-                              size: 11, color: scheme.onSurfaceVariant)
-                          : null,
+                        const SizedBox(width: 2),
+                        AppMenuComboArrow(
+                          open: open,
+                          size: 15,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                    itemBuilder: (context, option, label, selected) =>
+                        _SelectionColorOption(
+                      value: option.$1,
+                      color: option.$2,
+                      label: label,
+                      selected: selected,
                     ),
                   ),
+                ),
+                const SizedBox(width: 3),
+                Tooltip(
+                  message: '背景色',
+                  child: AppMenuCombo<(String?, Color)>(
+                    key: const ValueKey('background-color-combo'),
+                    width: 44,
+                    height: 30,
+                    value: _highlights.firstWhere(
+                      (option) => option.$1 == background,
+                      orElse: () => _highlights.first,
+                    ),
+                    items: _highlights,
+                    labelFor: (option) => _highlightLabel(option.$1),
+                    onChanged: (option) {
+                      controller.formatSelection(
+                        Attribute.clone(Attribute.background, option.$1),
+                      );
+                      _focusFor(project).requestFocus();
+                    },
+                    minMenuWidth: 118,
+                    maxMenuWidth: 148,
+                    itemHeight: 30,
+                    buttonPadding: const EdgeInsets.only(left: 6, right: 2),
+                    itemPadding:
+                        const EdgeInsets.only(left: 10, right: 12),
+                    borderRadius: BorderRadius.circular(4),
+                    backgroundColor: Colors.transparent,
+                    foregroundColor: scheme.onSurfaceVariant,
+                    iconSize: 15,
+                    showSelectedCheck: false,
+                    buttonBuilder: (context, option, open) => Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _SelectionColorSwatch(
+                          value: option.$1,
+                          color: option.$2,
+                          selected: true,
+                        ),
+                        const SizedBox(width: 2),
+                        AppMenuComboArrow(
+                          open: open,
+                          size: 15,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                    itemBuilder: (context, option, label, selected) =>
+                        _SelectionColorOption(
+                      value: option.$1,
+                      color: option.$2,
+                      label: label,
+                      selected: selected,
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 4),
                 iconBtn(
                   isTodo ? Icons.task_alt : Icons.playlist_add_check,
@@ -718,6 +978,34 @@ class _HomePageState extends State<HomePage> with WindowListener {
 
   // -------------------------------------------------------------- todo panel
 
+  static String _highlightLabel(String? value) {
+    return switch (value) {
+      null => '无背景',
+      'rgba(255,213,79,0.55)' => '黄色',
+      'rgba(165,214,167,0.55)' => '绿色',
+      'rgba(144,202,249,0.55)' => '蓝色',
+      'rgba(244,143,177,0.55)' => '粉色',
+      'rgba(255,171,145,0.55)' => '橙色',
+      _ => '背景色',
+    };
+  }
+
+  static String _textColorLabel(String? value) {
+    return switch (value) {
+      null => '默认文字',
+      '#FF3B30' => '红色',
+      '#FF9500' => '橙色',
+      '#FFCC00' => '黄色',
+      '#34C759' => '绿色',
+      '#00C7BE' => '青色',
+      '#0A84FF' => '蓝色',
+      '#BF5AF2' => '紫色',
+      '#FFFFFF' => '白色',
+      '#000000' => '黑色',
+      _ => '文字颜色',
+    };
+  }
+
   /// Todo spans of one project, grouped by their section (nearest heading).
   Map<String, List<TodoSpan>> _todoGroupsFor(Project project) {
     final sw = Stopwatch()..start();
@@ -733,11 +1021,29 @@ class _HomePageState extends State<HomePage> with WindowListener {
     return groups;
   }
 
-  String _todoAnimationKey(Project project, TodoSpan todo) =>
-      '${project.id}:${todo.start}:${todo.length}:${todo.text}';
+  List<_KeyedTodo> _keyedTodos(Project project, List<TodoSpan> todos) {
+    final occurrences = <(String, String), int>{};
+    return [
+      for (final todo in todos)
+        () {
+          final signature = (todo.section, todo.text);
+          final occurrence = occurrences[signature] ?? 0;
+          occurrences[signature] = occurrence + 1;
+          return (
+            todo: todo,
+            key: (
+              projectId: project.id,
+              section: todo.section,
+              text: todo.text,
+              occurrence: occurrence,
+            ),
+          );
+        }(),
+    ];
+  }
 
   Future<void> _runTodoDismissal(
-      Set<String> keys, VoidCallback updateDocument) async {
+      Set<_TodoTileIdentity> keys, VoidCallback updateDocument) async {
     if (keys.isEmpty) {
       updateDocument();
       return;
@@ -753,11 +1059,12 @@ class _HomePageState extends State<HomePage> with WindowListener {
   Future<void> _unmarkTodoSpanAnimated(
       Project project, int start, int length) async {
     final end = start + length;
-    final affected = <String>{
+    final affected = <_TodoTileIdentity>{
       for (final group in _todoGroupsFor(project).values)
-        for (final todo in group)
-          if (todo.start < end && todo.start + todo.length > start)
-            _todoAnimationKey(project, todo),
+        for (final entry in _keyedTodos(project, group))
+          if (entry.todo.start < end &&
+              entry.todo.start + entry.todo.length > start)
+            entry.key,
     };
     await _runTodoDismissal(
       affected,
@@ -768,10 +1075,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
 
   Future<void> _clearCompleted(List<_TodoGroup> groups) async {
     if (_clearingDone) return;
-    final completedKeys = <String>{
+    final completedKeys = <_TodoTileIdentity>{
       for (final group in groups)
-        for (final todo in group.todos)
-          if (todo.done) _todoAnimationKey(group.project, todo),
+        for (final entry in _keyedTodos(group.project, group.todos))
+          if (entry.todo.done) entry.key,
     };
     if (completedKeys.isEmpty) return;
 
@@ -878,8 +1185,13 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     ),
                   ),
                 ),
-                for (final todo in group.todos)
-                  _buildTodoTile(context, group.project, todo),
+                for (final entry in _keyedTodos(group.project, group.todos))
+                  _buildTodoTile(
+                    context,
+                    group.project,
+                    entry.todo,
+                    entry.key,
+                  ),
               ],
             ],
           );
@@ -915,6 +1227,8 @@ class _HomePageState extends State<HomePage> with WindowListener {
     final scheme = Theme.of(context).colorScheme;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeUpDown,
+      onEnter: (_) => setState(() => _todoHeaderHovered = true),
+      onExit: (_) => setState(() => _todoHeaderHovered = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onVerticalDragStart: (_) => _startTodoResize(maxHeight),
@@ -922,9 +1236,14 @@ class _HomePageState extends State<HomePage> with WindowListener {
             _updateTodoResize(details.delta.dy, maxHeight),
         onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
         onVerticalDragCancel: () => _endTodoResize(maxHeight),
-        child: SizedBox(
+        child: AnimatedContainer(
           key: const ValueKey('todo-header'),
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
           height: _todoHeaderHeight,
+          color: _todoHeaderHovered
+              ? scheme.primary.withValues(alpha: 0.055)
+              : Colors.transparent,
           child: Row(
             children: [
               const SizedBox(width: 12),
@@ -953,26 +1272,54 @@ class _HomePageState extends State<HomePage> with WindowListener {
               const Spacer(),
               IconButton(
                 tooltip: '清除已完成待办',
+                style: ButtonStyle(
+                  fixedSize:
+                      const WidgetStatePropertyAll(Size.square(40)),
+                  padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+                  shape: const WidgetStatePropertyAll(
+                    RoundedRectangleBorder(),
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.disabled)) {
+                      return scheme.onSurfaceVariant.withValues(alpha: 0.35);
+                    }
+                    if (states.contains(WidgetState.hovered) ||
+                        states.contains(WidgetState.pressed)) {
+                      return Colors.white;
+                    }
+                    return scheme.onSurfaceVariant;
+                  }),
+                  backgroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.disabled)) {
+                      return Colors.transparent;
+                    }
+                    if (states.contains(WidgetState.pressed)) {
+                      return const Color(0xFFC50F1F);
+                    }
+                    if (states.contains(WidgetState.hovered)) {
+                      return const Color(0xFFE81123);
+                    }
+                    return Colors.transparent;
+                  }),
+                  overlayColor:
+                      const WidgetStatePropertyAll(Colors.transparent),
+                ),
                 icon: AnimatedRotation(
                   turns: _clearingDone ? 1 : 0,
                   duration: _panelMotion,
                   curve: Curves.easeOutCubic,
-                  child: Icon(Icons.done_all,
-                      size: 17,
-                      color: hasCompleted
-                          ? scheme.onSurfaceVariant
-                          : scheme.onSurfaceVariant.withValues(alpha: 0.35)),
+                  child: const Icon(Icons.done_all, size: 17),
                 ),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 32, height: 32),
                 onPressed: hasCompleted && !_clearingDone
                     ? () => _clearCompleted(groups)
                     : null,
               ),
               IconButton(
                 tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
+                style: const ButtonStyle(
+                  fixedSize: WidgetStatePropertyAll(Size.square(40)),
+                  padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                ),
                 icon: AnimatedSwitcher(
                   duration: _todoMotion,
                   transitionBuilder: (child, animation) =>
@@ -984,10 +1331,6 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 32, height: 32),
                 onPressed: () => _toggleTodoExpanded(maxHeight),
               ),
             ],
@@ -1001,11 +1344,14 @@ class _HomePageState extends State<HomePage> with WindowListener {
     final scheme = Theme.of(context).colorScheme;
     Widget pill(String label, bool active, VoidCallback onTap) {
       return GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: AnimatedContainer(
           duration: _todoMotion,
           curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          height: 28,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: active ? scheme.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
@@ -1036,14 +1382,18 @@ class _HomePageState extends State<HomePage> with WindowListener {
     );
   }
 
-  Widget _buildTodoTile(BuildContext context, Project project, TodoSpan todo) {
+  Widget _buildTodoTile(
+    BuildContext context,
+    Project project,
+    TodoSpan todo,
+    _TodoTileIdentity animationKey,
+  ) {
     final scheme = Theme.of(context).colorScheme;
     // In the all-projects view each todo's checkbox follows its own
     // project's theme color; the default blue applies when unset.
     final accent = project.colorValue == 0
         ? scheme.primary
         : Color(project.colorValue);
-    final animationKey = _todoAnimationKey(project, todo);
     final dismissing = _dismissingTodos.contains(animationKey);
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1115,6 +1465,121 @@ class _HomePageState extends State<HomePage> with WindowListener {
           offset: Offset(0, 4 * (1 - value)),
           child: child,
         ),
+      ),
+    );
+  }
+}
+
+class _SelectionColorOption extends StatelessWidget {
+  const _SelectionColorOption({
+    required this.value,
+    required this.color,
+    required this.label,
+    required this.selected,
+  });
+
+  final String? value;
+  final Color color;
+  final String label;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        SizedBox(
+          width: 22,
+          child: selected
+              ? Icon(Icons.check, size: 16, color: scheme.primary)
+              : null,
+        ),
+        _SelectionColorSwatch(
+          value: value,
+          color: color,
+          selected: selected,
+        ),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: selected ? scheme.primary : scheme.onSurface,
+              ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SelectionTextColorIndicator extends StatelessWidget {
+  const _SelectionTextColorIndicator({
+    required this.value,
+    required this.color,
+  });
+
+  final String? value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final effectiveColor = value == null ? scheme.onSurfaceVariant : color;
+    return SizedBox(
+      width: 15,
+      height: 20,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'A',
+            style: TextStyle(
+              height: 1,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: effectiveColor,
+              shadows: color.computeLuminance() > 0.9
+                  ? [Shadow(color: scheme.outline, blurRadius: 1)]
+                  : null,
+            ),
+          ),
+          const SizedBox(height: 1),
+          Container(width: 13, height: 2, color: effectiveColor),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectionColorSwatch extends StatelessWidget {
+  const _SelectionColorSwatch({
+    required this.value,
+    required this.color,
+    required this.selected,
+  });
+
+  final String? value;
+  final Color color;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final swatchColor = value == null ? scheme.surface : color;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: swatchColor,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? scheme.primary : scheme.outlineVariant,
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: SizedBox(
+        width: 14,
+        height: 14,
+        child: value == null
+            ? Icon(Icons.block, size: 9, color: scheme.onSurfaceVariant)
+            : null,
       ),
     );
   }

@@ -43,6 +43,15 @@ class AppStore extends ChangeNotifier {
       final controller = QuillController(
         document: document,
         selection: const TextSelection.collapsed(offset: 0),
+        // The native rich-clipboard probe in flutter_quill 11.x can stop the
+        // paste pipeline before it reaches Flutter's plain-text clipboard on
+        // Windows. Notes in Sticky Panel are text-first, so skip that fragile
+        // probe and paste through the reliable system text format directly.
+        config: const QuillControllerConfig(
+          clipboardConfig: QuillClipboardConfig(
+            enableExternalRichPaste: false,
+          ),
+        ),
       );
       _PendingTodoFormat? pendingTodoFormat;
       controller.onReplaceText = (index, len, data) {

@@ -1,7 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sticky_panel/app.dart';
 import 'package:sticky_panel/models.dart';
@@ -195,19 +198,23 @@ void main() {
     expect(spans[1].text, '要买冰淇淋');
   });
 
-  Future<AppStore> pumpTodoApp(WidgetTester tester) async {
-    final document = jsonEncode([
-      {'insert': '阶段一'},
-      {
-        'insert': '\n',
-        'attributes': {'header': 2},
-      },
-      {
-        'insert': '修复问题',
-        'attributes': {'todo': 'open'},
-      },
-      {'insert': '\n'},
-    ]);
+  Future<AppStore> pumpTodoApp(
+    WidgetTester tester, {
+    String? documentJson,
+  }) async {
+    final document = documentJson ??
+        jsonEncode([
+          {'insert': '阶段一'},
+          {
+            'insert': '\n',
+            'attributes': {'header': 2},
+          },
+          {
+            'insert': '修复问题',
+            'attributes': {'todo': 'open'},
+          },
+          {'insert': '\n'},
+        ]);
     SharedPreferences.setMockInitialValues({
       'sticky_panel_data_v2': jsonEncode({
         'selectedIndex': 0,
@@ -259,6 +266,207 @@ void main() {
     await tester.drag(header, const Offset(0, 1000));
     await tester.pumpAndSettle();
     expect(tester.getSize(panel).height, 40);
+  });
+
+  testWidgets('todo header buttons fill the row and use danger hover styling',
+      (tester) async {
+    await pumpTodoApp(tester);
+
+    IconButton button(String tooltip) => tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == tooltip);
+
+    final clear = button('清除已完成待办');
+    final expand = button('待办区占满面板');
+    final close = button('关闭');
+
+    expect(clear.style?.fixedSize?.resolve({}), const Size.square(40));
+    expect(expand.style?.fixedSize?.resolve({}), const Size.square(40));
+    expect(
+      clear.style?.backgroundColor?.resolve({WidgetState.hovered}),
+      const Color(0xFFE81123),
+    );
+    expect(
+      clear.style?.foregroundColor?.resolve({WidgetState.hovered}),
+      Colors.white,
+    );
+    expect(
+      close.style?.backgroundColor?.resolve({WidgetState.hovered}),
+      const Color(0xFFE81123),
+    );
+    expect(
+      close.style?.foregroundColor?.resolve({WidgetState.hovered}),
+      Colors.white,
+    );
+  });
+
+  testWidgets('todo header gives visual feedback on hover', (tester) async {
+    await pumpTodoApp(tester);
+    final header = find.byKey(const ValueKey('todo-header'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(header));
+    await tester.pump(const Duration(milliseconds: 120));
+
+    final container = tester.widget<AnimatedContainer>(header);
+    final decoration = container.decoration! as BoxDecoration;
+    expect(decoration.color, isNot(Colors.transparent));
+    await mouse.removePointer();
+  });
+
+  testWidgets('Windows editor context menu is localized and compact',
+      (tester) async {
+    final store = await pumpTodoApp(tester);
+    final project = store.selected!;
+    store.controllerFor(project).updateSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 2),
+          ChangeSource.local,
+        );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byType(QuillEditor),
+      buttons: kSecondaryButton,
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DesktopTextSelectionToolbar), findsOneWidget);
+    expect(find.text('剪切'), findsOneWidget);
+    expect(find.text('复制'), findsOneWidget);
+    expect(find.text('粘贴'), findsOneWidget);
+    expect(find.text('全选'), findsOneWidget);
+    for (final textButton in find
+        .descendant(
+          of: find.byType(DesktopTextSelectionToolbar),
+          matching: find.byType(TextButton),
+        )
+        .evaluate()) {
+      expect(tester.getSize(find.byWidget(textButton.widget)).height, 32);
+    }
+  });
+
+  testWidgets('selection formatting uses font-size and color dropdowns',
+      (tester) async {
+    final store = await pumpTodoApp(tester);
+    final controller = store.controllerFor(store.selected!);
+    controller.updateSelection(
+      const TextSelection(baseOffset: 0, extentOffset: 2),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('font-size-combo')), findsOneWidget);
+    expect(find.byKey(const ValueKey('text-color-combo')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('background-color-combo')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('font-size-combo')));
+    await tester.pumpAndSettle();
+    expect(find.text('默认'), findsWidgets);
+    expect(find.text('18'), findsOneWidget);
+    await tester.tap(find.text('18'));
+    await tester.pumpAndSettle();
+    expect(controller.getSelectionStyle().attributes['size']?.value, '18');
+
+    await tester.tap(find.byKey(const ValueKey('text-color-combo')));
+    await tester.pumpAndSettle();
+    expect(find.text('默认文字'), findsOneWidget);
+    expect(find.text('红色'), findsOneWidget);
+    await tester.tap(find.text('红色'));
+    await tester.pumpAndSettle();
+    expect(controller.getSelectionStyle().attributes['color']?.value, '#FF3B30');
+
+    await tester.tap(find.byKey(const ValueKey('background-color-combo')));
+    await tester.pumpAndSettle();
+    expect(find.text('无背景'), findsOneWidget);
+    expect(find.text('黄色'), findsOneWidget);
+    await tester.tap(find.text('黄色'));
+    await tester.pumpAndSettle();
+    expect(
+      controller.getSelectionStyle().attributes['background']?.value,
+      'rgba(255,213,79,0.55)',
+    );
+  });
+
+  testWidgets('editor uses a stable Simplified Chinese glyph fallback',
+      (tester) async {
+    await pumpTodoApp(tester);
+
+    final style = tester.widget<DefaultTextStyle>(
+      find.byKey(const ValueKey('editor-text-style-p1')),
+    );
+    expect(style.style.locale, const Locale('zh', 'CN'));
+    expect(style.style.fontFamilyFallback, contains('Microsoft YaHei UI'));
+    expect(style.style.fontFamilyFallback, contains('PingFang SC'));
+  });
+
+  testWidgets('Ctrl+V pastes plain text inside the editor', (tester) async {
+    final store = await pumpTodoApp(tester);
+    final controller = store.controllerFor(store.selected!);
+    expect(
+      controller.config.clipboardConfig?.enableExternalRichPaste,
+      isFalse,
+    );
+
+    await Clipboard.setData(const ClipboardData(text: '粘贴进来的文字'));
+    await tester.tap(find.byType(QuillEditor));
+    controller.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+
+    expect(controller.document.toPlainText(), startsWith('粘贴进来的文字'));
+  });
+
+  testWidgets('editing ordinary text keeps later todo row identities',
+      (tester) async {
+    final document = jsonEncode([
+      {
+        'insert': '待办1',
+        'attributes': {'todo': 'open'},
+      },
+      {'insert': '\n普通行\n'},
+      {
+        'insert': '待办2',
+        'attributes': {'todo': 'open'},
+      },
+      {'insert': '\n'},
+      {
+        'insert': '待办3',
+        'attributes': {'todo': 'open'},
+      },
+      {'insert': '\n'},
+    ]);
+    final store = await pumpTodoApp(tester, documentJson: document);
+    await tester.pumpAndSettle();
+    final panel = find.byKey(const ValueKey('todo-panel'));
+
+    Finder todoTile(String text) => find.ancestor(
+          of: find.descendant(of: panel, matching: find.text(text)),
+          matching: find.byType(TweenAnimationBuilder<double>),
+        );
+
+    final secondElement = todoTile('待办2').evaluate().single;
+    final thirdElement = todoTile('待办3').evaluate().single;
+    final controller = store.controllerFor(store.selected!);
+    final insertAt = '待办1\n普通'.length;
+    controller.replaceText(
+      insertAt,
+      0,
+      '新',
+      TextSelection.collapsed(offset: insertAt + 1),
+    );
+    await tester.pump(const Duration(milliseconds: 30));
+
+    expect(todoTile('待办2').evaluate().single, same(secondElement));
+    expect(todoTile('待办3').evaluate().single, same(thirdElement));
   });
 
   testWidgets('close button asks for confirmation', (tester) async {
