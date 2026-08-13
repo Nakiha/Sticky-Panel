@@ -270,22 +270,26 @@ class RenderParagraphProxy extends RenderProxyBox
   @override
   RenderParagraph? get child => super.child as RenderParagraph?;
 
+  double? _laidOutLineHeight;
+
   @override
   double get preferredLineHeight {
     // PATCH (sticky_panel): the prototype painter is built from the line's
     // paragraph base style, so the caret kept the base font height even
-    // when the line's spans carried a larger inline `size` attribute. Each
-    // TextLine widget lays out exactly one visual line, and text_line calls
-    // this only after the body has been laid out, so our own size.height IS
-    // the real line height. (Reading child.size here is illegal mid-layout;
-    // reading our own size is always allowed.)
-    if (hasSize) return size.height;
-    return _prototypePainter.preferredLineHeight;
+    // when the line's spans carried a larger inline `size` attribute. Cache
+    // our height while performing our own layout. Reading `size` lazily from
+    // this getter can violate Flutter's size-access rules when selection
+    // queries arrive during an ancestor's layout, producing a one-frame red
+    // ErrorWidget before the formatting panel appears.
+    return _laidOutLineHeight ?? _prototypePainter.preferredLineHeight;
   }
 
   @override
-  Offset getOffsetForCaret(TextPosition position, Rect caretPrototype) =>
-      child!.getOffsetForCaret(position, caretPrototype);
+  Offset getOffsetForCaret(TextPosition position, Rect caretPrototype) {
+    final offset = child!.getOffsetForCaret(position, caretPrototype);
+    final tightBox = _tightBoxForCaret(position);
+    return tightBox == null ? offset : Offset(offset.dx, tightBox.top);
+  }
 
   @override
   TextPosition getPositionForOffset(Offset offset) =>
@@ -293,7 +297,31 @@ class RenderParagraphProxy extends RenderProxyBox
 
   @override
   double? getFullHeightForCaret(TextPosition position) =>
+      _tightBoxForCaret(position)?.toRect().height ??
       child!.getFullHeightForCaret(position);
+
+  TextBox? _tightBoxForCaret(TextPosition position) {
+    final renderChild = child;
+    if (renderChild == null) return null;
+    final textLength = renderChild.text.toPlainText().length;
+    if (textLength == 0) return null;
+
+    final offset = position.offset.clamp(0, textLength).toInt();
+    final plainText = renderChild.text.toPlainText();
+    final useFollowingGlyph =
+        position.affinity == TextAffinity.downstream &&
+        offset < textLength &&
+        plainText.codeUnitAt(offset) != 0x0A;
+    final start = useFollowingGlyph
+        ? offset
+        : (offset - 1).clamp(0, textLength - 1).toInt();
+    final boxes = renderChild.getBoxesForSelection(
+      TextSelection(baseOffset: start, extentOffset: start + 1),
+      boxHeightStyle: BoxHeightStyle.tight,
+    );
+    if (boxes.isEmpty) return null;
+    return useFollowingGlyph ? boxes.first : boxes.last;
+  }
 
   @override
   TextRange getWordBoundary(TextPosition position) =>
@@ -306,6 +334,7 @@ class RenderParagraphProxy extends RenderProxyBox
   @override
   void performLayout() {
     super.performLayout();
+    _laidOutLineHeight = size.height;
     _prototypePainter.layout(
         minWidth: constraints.minWidth, maxWidth: constraints.maxWidth);
   }

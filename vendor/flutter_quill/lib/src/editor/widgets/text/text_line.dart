@@ -170,8 +170,12 @@ class _TextLineState extends State<TextLine> {
       }
     }
     final textSpan = _getTextSpanForWholeLine();
-    final strutStyle =
-        StrutStyle.fromTextStyle(textSpan.style ?? const TextStyle());
+    // PATCH (sticky_panel): a paragraph strut makes Flutter's
+    // getFullHeightForCaret return the base paragraph height at every text
+    // position, even when the caret sits next to an inline 22px span. Let the
+    // actual glyph runs determine line/caret metrics; the base TextStyle still
+    // supplies stable metrics for empty lines.
+    const strutStyle = StrutStyle.disabled;
     final textAlign = _getTextAlign();
     final child = RichText(
       key: _richTextKey,
@@ -1111,7 +1115,10 @@ class RenderEditableTextLine extends RenderEditableBox {
 
   @override
   double preferredLineHeight(TextPosition position) {
-    return _body!.preferredLineHeight;
+    // PATCH (sticky_panel): use the actual glyph run at the caret when
+    // RenderParagraph can provide it. The paragraph-wide fallback is still
+    // needed for empty lines and embeds.
+    return _body!.getFullHeightForCaret(position) ?? _body!.preferredLineHeight;
   }
 
   @override
@@ -1119,9 +1126,19 @@ class RenderEditableTextLine extends RenderEditableBox {
 
   double get cursorWidth => cursorCont.style.width;
 
-  double get cursorHeight =>
-      cursorCont.style.height ??
-      preferredLineHeight(const TextPosition(offset: 0));
+  double cursorHeightAt(TextPosition position) =>
+      cursorCont.style.height ?? preferredLineHeight(position);
+
+  TextPosition get _currentCaretPosition {
+    final globalPosition = cursorCont.floatingCursorTextPosition.value ??
+        textSelection.extent;
+    return TextPosition(
+      offset: (globalPosition.offset - line.documentOffset)
+          .clamp(0, math.max(0, line.length - 1))
+          .toInt(),
+      affinity: globalPosition.affinity,
+    );
+  }
 
   // TODO: This is no longer producing the highest-fidelity caret
   // heights for Android, especially when non-alphabetic languages
@@ -1135,6 +1152,7 @@ class RenderEditableTextLine extends RenderEditableBox {
   /// of the cursor for iOS is approximate and obtained through an eyeball
   /// comparison.
   void _computeCaretPrototype() {
+    final cursorHeight = cursorHeightAt(_currentCaretPosition);
     if (isIos) {
       _caretPrototype = Rect.fromLTWH(0, 0, cursorWidth, cursorHeight + 2);
     } else {
@@ -1509,7 +1527,7 @@ class RenderEditableTextLine extends RenderEditableBox {
       0,
       0,
       cursorWidth,
-      cursorHeight,
+      cursorHeightAt(position),
     ).shift(caretOffset);
     final cursorOffset = cursorCont.style.offset;
     // Add additional cursor offset (generally only if on iOS).

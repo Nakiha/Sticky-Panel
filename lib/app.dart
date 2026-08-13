@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,17 @@ const _defaultProjectBlue = Color(0xFF007AFF);
 const _defaultProjectBlueDark = Color(0xFF0A84FF);
 const kAppDisplayName = '随手记';
 
+Color _defaultProjectAccent(Brightness brightness) {
+  return brightness == Brightness.dark
+      ? _defaultProjectBlueDark
+      : _defaultProjectBlue;
+}
+
+Color _projectAccent(Project project, Brightness brightness) =>
+    project.colorValue == 0
+    ? _defaultProjectAccent(brightness)
+    : Color(project.colorValue);
+
 typedef _TodoGroup = ({String label, Project project, List<TodoSpan> todos});
 typedef _TodoTileIdentity = ({
   String projectId,
@@ -25,6 +37,11 @@ typedef _TodoTileIdentity = ({
   int occurrence,
 });
 typedef _KeyedTodo = ({TodoSpan todo, _TodoTileIdentity key});
+typedef _SelectionPanelPreference = ({
+  TextSelection selection,
+  double pointerX,
+});
+typedef _SelectionPanelAnchor = ({Rect selectionRect, double preferredX});
 
 enum _CloseChoice { hideToTray, exitApplication }
 
@@ -132,11 +149,13 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   /// it to multiple scroll views and throw on every tab switch.
   final _editorFocusNodes = <String, FocusNode>{};
   final _editorScrollControllers = <String, ScrollController>{};
+  final _editorKeys = <String, GlobalKey<EditorState>>{};
+  final _editorStackKeys = <String, GlobalKey>{};
 
-  /// Where the selection panel appears, captured on pointer-up (i.e. where
-  /// the mouse rests when the drag selection finishes). Null until the
-  /// first pointer selection.
-  final _selectionPanelAnchors = <String, ValueNotifier<Offset?>>{};
+  /// A completed mouse selection may supply a preferred horizontal position.
+  /// Vertical placement always comes from the actual selection geometry.
+  final _selectionPanelPreferences =
+      <String, ValueNotifier<_SelectionPanelPreference?>>{};
 
   /// True while the pointer is down in the editor: the panel stays hidden
   /// during the drag so it can't fly around, and appears on release.
@@ -163,11 +182,18 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   ScrollController _scrollFor(Project project) =>
       _editorScrollControllers.putIfAbsent(project.id, ScrollController.new);
 
-  ValueNotifier<Offset?> _selectionAnchorFor(Project project) =>
-      _selectionPanelAnchors.putIfAbsent(
-        project.id,
-        () => ValueNotifier<Offset?>(null),
-      );
+  GlobalKey<EditorState> _editorKeyFor(Project project) =>
+      _editorKeys.putIfAbsent(project.id, GlobalKey<EditorState>.new);
+
+  GlobalKey _editorStackKeyFor(Project project) =>
+      _editorStackKeys.putIfAbsent(project.id, GlobalKey.new);
+
+  ValueNotifier<_SelectionPanelPreference?> _selectionPreferenceFor(
+    Project project,
+  ) => _selectionPanelPreferences.putIfAbsent(
+    project.id,
+    () => ValueNotifier<_SelectionPanelPreference?>(null),
+  );
 
   void _pruneEditorAttachments() {
     final live = store.projects.map((p) => p.id).toSet();
@@ -182,11 +208,13 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       _editorScrollControllers.remove(id)?.dispose();
     }
     for (final id
-        in _selectionPanelAnchors.keys
+        in _selectionPanelPreferences.keys
             .where((id) => !live.contains(id))
             .toList()) {
-      _selectionPanelAnchors.remove(id)?.dispose();
+      _selectionPanelPreferences.remove(id)?.dispose();
     }
+    _editorKeys.removeWhere((id, _) => !live.contains(id));
+    _editorStackKeys.removeWhere((id, _) => !live.contains(id));
     _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
   }
 
@@ -203,8 +231,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     for (final controller in _editorScrollControllers.values) {
       controller.dispose();
     }
-    for (final anchor in _selectionPanelAnchors.values) {
-      anchor.dispose();
+    for (final preference in _selectionPanelPreferences.values) {
+      preference.dispose();
     }
     _selectingNotifier.dispose();
     super.dispose();
@@ -484,9 +512,11 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         final project = store.selected;
         // Per-project theme color: override the accent for everything below.
         final base = Theme.of(context);
-        final scheme = project == null || project.colorValue == 0
+        final scheme = project == null
             ? base.colorScheme
-            : base.colorScheme.copyWith(primary: Color(project.colorValue));
+            : base.colorScheme.copyWith(
+                primary: _projectAccent(project, base.brightness),
+              );
         return Theme(
           data: base.copyWith(colorScheme: scheme),
           child: Builder(
@@ -579,6 +609,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
               _alwaysOnTop ? '取消置顶' : '窗口置顶',
               _toggleAlwaysOnTop,
               active: _alwaysOnTop,
+              neutralActive: true,
               padding: const EdgeInsets.all(4),
             ),
             Expanded(
@@ -621,6 +652,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     String tooltip,
     VoidCallback onPressed, {
     bool active = false,
+    bool neutralActive = false,
     EdgeInsetsGeometry padding = const EdgeInsets.symmetric(vertical: 4),
   }) {
     final scheme = Theme.of(context).colorScheme;
@@ -633,6 +665,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           scheme,
           size: const Size(32, 28),
           active: active,
+          neutralActive: neutralActive,
           borderRadius: 7,
         ),
         onPressed: onPressed,
@@ -643,12 +676,11 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   Widget _buildTab(BuildContext context, Project project, int index) {
     final scheme = Theme.of(context).colorScheme;
     final selected = index == store.selectedIndex;
-    final projectColor = project.colorValue == 0
-        ? null
-        : Color(project.colorValue);
+    final projectColor = _projectAccent(project, Theme.of(context).brightness);
     return _ProjectTab(
       key: ValueKey('project-tab-${project.id}'),
       selected: selected,
+      projectId: project.id,
       projectColor: projectColor,
       name: project.name,
       textColor: selected ? scheme.onSurface : scheme.onSurfaceVariant,
@@ -691,6 +723,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     ColorScheme scheme, {
     required Size size,
     bool active = false,
+    bool neutralActive = false,
     bool danger = false,
     double borderRadius = 4,
   }) {
@@ -711,7 +744,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           return scheme.onSurfaceVariant.withValues(alpha: 0.35);
         }
         if (danger && _isInteractiveButtonState(states)) return scheme.error;
-        return active ? scheme.primary : scheme.onSurfaceVariant;
+        if (!active) return scheme.onSurfaceVariant;
+        return neutralActive ? scheme.onSurface : scheme.primary;
       }),
       backgroundColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.disabled)) return Colors.transparent;
@@ -797,9 +831,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
   Future<void> _pickProjectColor(BuildContext context, Project project) async {
     final scheme = Theme.of(context).colorScheme;
-    final defaultBlue = Theme.of(context).brightness == Brightness.dark
-        ? _defaultProjectBlueDark
-        : _defaultProjectBlue;
+    final defaultBlue = _defaultProjectAccent(Theme.of(context).brightness);
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -995,12 +1027,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
   Widget _buildEditor(BuildContext context, Project project) {
     final base = Theme.of(context);
-    final scheme = project.colorValue == 0
-        ? base.colorScheme
-        : base.colorScheme.copyWith(primary: Color(project.colorValue));
+    final controller = store.controllerFor(project);
+    final scheme = base.colorScheme.copyWith(
+      primary: _projectAccent(project, base.brightness),
+    );
     // Quill derives its base text style from the ambient DefaultTextStyle,
     // so this keeps the document readable in both light and dark mode.
     return Stack(
+      key: _editorStackKeyFor(project),
       children: [
         DefaultTextStyle(
           key: ValueKey('editor-text-style-${project.id}'),
@@ -1026,16 +1060,23 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             // down and reappears next to the cursor on release.
             onPointerDown: (_) => _selectingNotifier.value = true,
             onPointerUp: (event) {
-              _selectionAnchorFor(project).value = event.localPosition;
+              final selection = controller.selection;
+              if (selection.isValid && !selection.isCollapsed) {
+                _selectionPreferenceFor(project).value = (
+                  selection: selection,
+                  pointerX: event.localPosition.dx,
+                );
+              }
               _selectingNotifier.value = false;
             },
             onPointerCancel: (_) => _selectingNotifier.value = false,
             child: QuillEditor(
               key: ValueKey(project.id),
-              controller: store.controllerFor(project),
+              controller: controller,
               focusNode: _focusFor(project),
               scrollController: _scrollFor(project),
               config: QuillEditorConfig(
+                editorKey: _editorKeyFor(project),
                 placeholder: '随手记…',
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 expands: true,
@@ -1098,12 +1139,67 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     return _editorCache.putIfAbsent(key, () => _buildEditor(context, project));
   }
 
+  _SelectionPanelAnchor? _selectionPanelAnchorFor(
+    Project project,
+    TextSelection selection, {
+    double? pointerX,
+  }) {
+    if (!selection.isValid || selection.isCollapsed) return null;
+
+    final editorState = _editorKeyFor(project).currentState;
+    final stackBox =
+        _editorStackKeyFor(project).currentContext?.findRenderObject()
+            as RenderBox?;
+    if (editorState == null ||
+        stackBox == null ||
+        !stackBox.hasSize ||
+        !editorState.renderEditor.hasSize) {
+      return null;
+    }
+
+    final editor = editorState.renderEditor;
+    final startRect = editor.getLocalRectForCaret(
+      TextPosition(offset: selection.start),
+    );
+    final endRect = editor.getLocalRectForCaret(
+      TextPosition(offset: selection.end, affinity: TextAffinity.upstream),
+    );
+    final endpoints = editor.getEndpointsForSelection(selection);
+    final endpointBottom = endpoints.fold<double>(
+      0,
+      (bottom, endpoint) => math.max(bottom, endpoint.point.dy),
+    );
+    final sameLine = (startRect.center.dy - endRect.center.dy).abs() < 1;
+    final localRect = Rect.fromLTRB(
+      sameLine ? math.min(startRect.left, endRect.left) : 0,
+      math.min(startRect.top, endRect.top),
+      sameLine ? math.max(startRect.right, endRect.right) : editor.size.width,
+      math.max(math.max(startRect.bottom, endRect.bottom), endpointBottom),
+    );
+    final topLeft = editor.localToGlobal(localRect.topLeft, ancestor: stackBox);
+    final bottomRight = editor.localToGlobal(
+      localRect.bottomRight,
+      ancestor: stackBox,
+    );
+    final selectionRect = Rect.fromPoints(topLeft, bottomRight);
+    return (
+      selectionRect: selectionRect,
+      preferredX: pointerX ?? selectionRect.center.dx,
+    );
+  }
+
   /// Floating rich-text mini panel that appears while text is selected.
   Widget _buildSelectionPanel(BuildContext context, Project project) {
     final scheme = Theme.of(context).colorScheme;
     final controller = store.controllerFor(project);
+    final preference = _selectionPreferenceFor(project);
     return AnimatedBuilder(
-      animation: Listenable.merge([controller, _selectingNotifier]),
+      animation: Listenable.merge([
+        controller,
+        _selectingNotifier,
+        preference,
+        _scrollFor(project),
+      ]),
       builder: (context, _) {
         final selection = controller.selection;
         final visible =
@@ -1191,6 +1287,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     backgroundColor: Colors.transparent,
                     foregroundColor: scheme.onSurfaceVariant,
                     iconSize: 15,
+                    enabled: visible,
                   ),
                 ),
                 const SizedBox(width: 3),
@@ -1222,6 +1319,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     foregroundColor: scheme.onSurfaceVariant,
                     iconSize: 15,
                     showSelectedCheck: false,
+                    enabled: visible,
                     buttonBuilder: (context, option, open) => Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -1275,6 +1373,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     foregroundColor: scheme.onSurfaceVariant,
                     iconSize: 15,
                     showSelectedCheck: false,
+                    enabled: visible,
                     buttonBuilder: (context, option, open) => Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -1323,20 +1422,26 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           ),
         );
 
-        // The panel is hidden during drag selection (visible=false) and
-        // appears next to the pointer-up position; without a pointer anchor
-        // (keyboard selection) it falls back to the bottom-left corner.
-        return ValueListenableBuilder<Offset?>(
-          valueListenable: _selectionAnchorFor(project),
-          builder: (context, anchor, _) => IgnorePointer(
-            ignoring: !visible,
-            child: CustomSingleChildLayout(
-              delegate: _SelectionPanelLayoutDelegate(anchor: anchor),
-              child: AnimatedOpacity(
-                opacity: visible ? 1 : 0,
-                duration: const Duration(milliseconds: 120),
-                child: panel,
-              ),
+        final pointerPreference = preference.value;
+        final anchor = _selectionPanelAnchorFor(
+          project,
+          selection,
+          pointerX: pointerPreference?.selection == selection
+              ? pointerPreference?.pointerX
+              : null,
+        );
+
+        // The selection rect determines vertical avoidance. Mouse release only
+        // influences the horizontal position, so the panel can never blindly
+        // cover the text where the drag happened.
+        return IgnorePointer(
+          ignoring: !visible,
+          child: CustomSingleChildLayout(
+            delegate: _SelectionPanelLayoutDelegate(anchor: anchor),
+            child: AnimatedOpacity(
+              opacity: visible ? 1 : 0,
+              duration: const Duration(milliseconds: 120),
+              child: panel,
             ),
           ),
         );
@@ -1748,9 +1853,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     final scheme = Theme.of(context).colorScheme;
     // In the all-projects view each todo's checkbox follows its own
     // project's theme color; the default blue applies when unset.
-    final accent = project.colorValue == 0
-        ? scheme.primary
-        : Color(project.colorValue);
+    final accent = _projectAccent(project, Theme.of(context).brightness);
     final dismissing = _dismissingTodos.contains(animationKey);
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1764,7 +1867,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                   ScaleTransition(scale: animation, child: child),
               child: Icon(
                 todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
-                key: ValueKey(todo.done),
+                key: ValueKey('todo-indicator-${project.id}-${todo.start}'),
                 size: 17,
                 color: todo.done ? scheme.onSurfaceVariant : accent,
               ),
@@ -1825,15 +1928,16 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   }
 }
 
-/// Positions the selection panel: next to the pointer-up spot when a drag
-/// selection set an anchor, otherwise at the bottom-left corner.
+/// Positions the selection panel outside the selected text. The selection
+/// geometry owns vertical placement; a mouse release only biases horizontal
+/// placement.
 class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
   const _SelectionPanelLayoutDelegate({required this.anchor});
 
   static const double _margin = 8;
-  static const double _gap = 14;
+  static const double _selectionGap = 10;
 
-  final Offset? anchor;
+  final _SelectionPanelAnchor? anchor;
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
@@ -1860,18 +1964,33 @@ class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
 
     final target = anchor;
     if (target == null) {
-      // Bottom-left fallback (keyboard selections).
+      // Geometry can be temporarily unavailable during the first layout.
       return Offset(12, maxTop.toDouble());
     }
 
-    final left = (target.dx - childSize.width / 2)
+    final left = (target.preferredX - childSize.width / 2)
         .clamp(_margin, maxLeft)
         .toDouble();
-    var top = target.dy + _gap;
-    if (top + childSize.height > size.height - _margin) {
-      top = target.dy - childSize.height - _gap;
+    final exclusion = target.selectionRect.inflate(_selectionGap);
+    final aboveTop = exclusion.top - childSize.height;
+    final belowTop = exclusion.bottom;
+    final aboveFits = aboveTop >= _margin;
+    final belowFits = belowTop <= maxTop;
+
+    // Above is the least disruptive default: it leaves the selected text and
+    // the following line visible for the user's next edit. Flip below only
+    // when the upper candidate cannot fit.
+    final double top;
+    if (aboveFits) {
+      top = aboveTop;
+    } else if (belowFits) {
+      top = belowTop;
+    } else {
+      final roomAbove = exclusion.top - _margin;
+      final roomBelow = size.height - _margin - exclusion.bottom;
+      top = roomAbove >= roomBelow ? _margin : maxTop.toDouble();
     }
-    return Offset(left, top.clamp(_margin, maxTop).toDouble());
+    return Offset(left, top);
   }
 
   @override
@@ -1996,6 +2115,7 @@ class _ProjectTab extends StatefulWidget {
   const _ProjectTab({
     super.key,
     required this.selected,
+    required this.projectId,
     required this.projectColor,
     required this.name,
     required this.textColor,
@@ -2005,7 +2125,8 @@ class _ProjectTab extends StatefulWidget {
   });
 
   final bool selected;
-  final Color? projectColor;
+  final String projectId;
+  final Color projectColor;
   final String name;
   final Color textColor;
   final Color surfaceColor;
@@ -2066,10 +2187,13 @@ class _ProjectTabState extends State<_ProjectTab> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (widget.projectColor != null) ...[
-                  Icon(Icons.circle, size: 7, color: widget.projectColor),
-                  const SizedBox(width: 5),
-                ],
+                Icon(
+                  Icons.circle,
+                  key: ValueKey('project-color-dot-${widget.projectId}'),
+                  size: 7,
+                  color: widget.projectColor,
+                ),
+                const SizedBox(width: 5),
                 Flexible(
                   child: Text(
                     widget.name,

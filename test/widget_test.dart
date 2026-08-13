@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_quill/flutter_quill.dart';
+import 'package:flutter_quill/src/editor/widgets/text/text_line.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sticky_panel/app.dart';
 import 'package:sticky_panel/models.dart';
@@ -366,6 +367,8 @@ void main() {
         scheme.onSurface.withValues(alpha: 0.07),
       );
     }
+    expect(pin.style?.foregroundColor?.resolve({}), scheme.onSurface);
+    expect(add.style?.foregroundColor?.resolve({}), scheme.onSurfaceVariant);
     expect(
       clear.style?.backgroundColor?.resolve({WidgetState.hovered}),
       scheme.error.withValues(alpha: 0.12),
@@ -493,6 +496,56 @@ void main() {
     expect(decoration.color, const Color(0xFF007AFF));
   });
 
+  testWidgets('every project tab shows its own theme color dot', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    store.addProject('绿色项目');
+    final greenProject = store.projects.last;
+    store.setProjectColor(greenProject, 0xFF34C759);
+    await tester.pumpAndSettle();
+
+    final defaultDot = tester.widget<Icon>(
+      find.byKey(const ValueKey('project-color-dot-p1')),
+    );
+    final greenDot = tester.widget<Icon>(
+      find.byKey(ValueKey('project-color-dot-${greenProject.id}')),
+    );
+    expect(defaultDot.color, const Color(0xFF007AFF));
+    expect(greenDot.color, const Color(0xFF34C759));
+  });
+
+  testWidgets('all todos keep the accent of their owning project', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    final greenProject = store.projects.first;
+    store.setProjectColor(greenProject, 0xFF34C759);
+    store.addProject('默认蓝项目');
+    final blueProject = store.projects.last;
+    blueProject.docJson = jsonEncode([
+      {
+        'insert': '蓝色待办',
+        'attributes': {'todo': 'open'},
+      },
+      {'insert': '\n'},
+    ]);
+    store.selectProject(0);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('全部'));
+    await tester.pumpAndSettle();
+
+    final greenIndicator = tester.widget<Icon>(
+      find.byKey(const ValueKey('todo-indicator-p1-4')),
+    );
+    final blueIndicator = tester.widget<Icon>(
+      find.byKey(ValueKey('todo-indicator-${blueProject.id}-0')),
+    );
+    expect(greenIndicator.color, const Color(0xFF34C759));
+    expect(blueIndicator.color, const Color(0xFF007AFF));
+  });
+
   testWidgets('top bar keeps a balanced pin inset and flush close edge', (
     tester,
   ) async {
@@ -584,7 +637,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('font-size-combo')));
     await tester.pumpAndSettle();
     // No explicit size attribute shows the 14px base size, not a "默认".
-    expect(find.text('14'), findsWidgets);
+    expect(find.text('14'), findsNWidgets(2));
+    expect(find.byType(MenuItemButton), findsNWidgets(5));
+    expect(find.text('13'), findsOneWidget);
     expect(find.text('18'), findsOneWidget);
     await tester.tap(find.text('18'));
     await tester.pumpAndSettle();
@@ -613,7 +668,44 @@ void main() {
     );
   });
 
-  testWidgets('selection panel hides mid-drag and docks at pointer-up', (
+  testWidgets(
+    'font-size menu owns only one menu and paints its selected label',
+    (tester) async {
+      final store = await pumpTodoApp(tester);
+      final controller = store.controllerFor(store.selected!);
+      controller.formatText(0, 2, Attribute.clone(Attribute.size, '22'));
+      controller.updateSelection(
+        const TextSelection(baseOffset: 0, extentOffset: 2),
+        ChangeSource.local,
+      );
+      await tester.pumpAndSettle();
+
+      final combo = find.byKey(const ValueKey('font-size-combo'));
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(combo);
+        await tester.pump();
+        expect(find.byType(MenuItemButton), findsNWidgets(5));
+        expect(find.text('22'), findsNWidgets(2));
+
+        final selectedLabel = find.descendant(
+          of: find.byType(MenuItemButton).last,
+          matching: find.text('22'),
+        );
+        expect(selectedLabel, findsOneWidget);
+        expect(
+          tester.getRect(selectedLabel).right,
+          lessThan(tester.getRect(find.byType(MenuItemButton).last).right),
+        );
+
+        await tester.tap(combo);
+        await tester.pump();
+        expect(find.byType(MenuItemButton), findsNothing);
+        expect(find.text('22'), findsOneWidget);
+      }
+    },
+  );
+
+  testWidgets('selection panel avoids selected text and follows pointer x', (
     tester,
   ) async {
     final store = await pumpTodoApp(tester);
@@ -627,27 +719,74 @@ void main() {
     final panel = find.byKey(const ValueKey('selection-format-panel'));
     expect(panel, findsOneWidget);
 
-    // Keyboard/programmatic selection: bottom-left fallback.
     final editor = find.byType(QuillEditor);
-    expect(tester.getTopLeft(panel).dx - tester.getTopLeft(editor).dx, 12);
+    final renderEditor = tester
+        .state<QuillRawEditorState>(find.byType(QuillRawEditor))
+        .renderEditor;
+    Rect selectionRectFor(int start, int end) {
+      final startRect = renderEditor.getLocalRectForCaret(
+        TextPosition(offset: start),
+      );
+      final endRect = renderEditor.getLocalRectForCaret(
+        TextPosition(offset: end, affinity: TextAffinity.upstream),
+      );
+      return Rect.fromPoints(
+        renderEditor.localToGlobal(
+          Offset(
+            startRect.left < endRect.left ? startRect.left : endRect.left,
+            startRect.top < endRect.top ? startRect.top : endRect.top,
+          ),
+        ),
+        renderEditor.localToGlobal(
+          Offset(
+            startRect.right > endRect.right ? startRect.right : endRect.right,
+            startRect.bottom > endRect.bottom
+                ? startRect.bottom
+                : endRect.bottom,
+          ),
+        ),
+      );
+    }
+
+    final selectionRect = selectionRectFor(0, 2);
+    expect(tester.getRect(panel).overlaps(selectionRect.inflate(9)), isFalse);
 
     // While the pointer is down the panel hides...
     final listener = tester.widget<Listener>(
       find.byKey(const ValueKey('editor-pointer-listener-p1')),
     );
-    listener.onPointerDown!(const PointerDownEvent(position: Offset(50, 40)));
+    await tester.tap(find.byKey(const ValueKey('font-size-combo')));
     await tester.pump();
+    expect(find.byType(MenuItemButton), findsNWidgets(5));
+    listener.onPointerDown!(const PointerDownEvent(position: Offset(50, 40)));
+    await tester.pumpAndSettle();
+    expect(find.byType(MenuItemButton), findsNothing);
     final opacityHidden = tester.widget<AnimatedOpacity>(
       find.ancestor(of: panel, matching: find.byType(AnimatedOpacity)),
     );
     expect(opacityHidden.opacity, 0);
 
-    // ...and on release it docks next to the pointer (14px gap below).
-    listener.onPointerUp!(const PointerUpEvent(position: Offset(100, 80)));
+    // ...and on release it uses the pointer only as a horizontal preference.
+    listener.onPointerUp!(const PointerUpEvent(position: Offset(320, 80)));
     await tester.pump();
-    final topAfterRelease =
-        tester.getTopLeft(panel).dy - tester.getTopLeft(editor).dy;
-    expect(topAfterRelease, 94);
+    final panelRect = tester.getRect(panel);
+    expect(panelRect.overlaps(selectionRect.inflate(9)), isFalse);
+    expect(panelRect.center.dx - tester.getTopLeft(editor).dx, closeTo(320, 1));
+
+    // A later line has enough space above, so keyboard selection uses the
+    // preferred upper candidate instead of the old bottom-left fallback.
+    controller.replaceText(8, 0, '\n第三行\n第四行', null);
+    await tester.pumpAndSettle();
+    controller.updateSelection(
+      const TextSelection(baseOffset: 13, extentOffset: 15),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+    final laterSelectionRect = selectionRectFor(13, 15);
+    expect(
+      tester.getRect(panel).bottom,
+      lessThanOrEqualTo(laterSelectionRect.top - 9),
+    );
   });
 
   testWidgets('editor uses a stable Simplified Chinese glyph fallback', (
@@ -661,6 +800,39 @@ void main() {
     expect(style.style.locale, const Locale('zh', 'CN'));
     expect(style.style.fontFamilyFallback, contains('Microsoft YaHei UI'));
     expect(style.style.fontFamilyFallback, contains('PingFang SC'));
+  });
+
+  testWidgets('22px inline text produces a matching caret prototype', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    final controller = store.controllerFor(store.selected!);
+    // The second line starts at 4 and has four visible characters followed by
+    // a newline. A caret at offset 8 must inherit the last visible glyph, not
+    // the newline's base paragraph style.
+    controller.formatText(4, 4, Attribute.clone(Attribute.size, '22'));
+    controller.updateSelection(
+      const TextSelection.collapsed(offset: 8),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+
+    final lines = find
+        .byType(EditableTextLine)
+        .evaluate()
+        .map((element) => element.renderObject! as RenderEditableTextLine);
+    final line = lines.firstWhere(
+      (candidate) =>
+          candidate.line.documentOffset <= 8 &&
+          8 < candidate.line.documentOffset + candidate.line.length,
+    );
+    final position = TextPosition(offset: 8 - line.line.documentOffset);
+    final preferred = line.preferredLineHeight(position);
+    expect(preferred, greaterThan(20));
+    expect(
+      line.getCaretPrototype(position).height,
+      closeTo(preferred - 4, 0.01),
+    );
   });
 
   testWidgets('editor config keeps the reliable desktop paste path', (
