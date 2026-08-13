@@ -132,7 +132,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   /// it to multiple scroll views and throw on every tab switch.
   final _editorFocusNodes = <String, FocusNode>{};
   final _editorScrollControllers = <String, ScrollController>{};
-  final _selectionPanelAnchors = <String, ValueNotifier<Offset?>>{};
 
   AppStore get store => widget.store;
 
@@ -153,12 +152,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   ScrollController _scrollFor(Project project) =>
       _editorScrollControllers.putIfAbsent(project.id, ScrollController.new);
 
-  ValueNotifier<Offset?> _selectionAnchorFor(Project project) =>
-      _selectionPanelAnchors.putIfAbsent(
-        project.id,
-        () => ValueNotifier<Offset?>(null),
-      );
-
   void _pruneEditorAttachments() {
     final live = store.projects.map((p) => p.id).toSet();
     for (final id
@@ -170,12 +163,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             .where((id) => !live.contains(id))
             .toList()) {
       _editorScrollControllers.remove(id)?.dispose();
-    }
-    for (final id
-        in _selectionPanelAnchors.keys
-            .where((id) => !live.contains(id))
-            .toList()) {
-      _selectionPanelAnchors.remove(id)?.dispose();
     }
     _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
   }
@@ -192,9 +179,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     }
     for (final controller in _editorScrollControllers.values) {
       controller.dispose();
-    }
-    for (final anchor in _selectionPanelAnchors.values) {
-      anchor.dispose();
     }
     super.dispose();
   }
@@ -929,7 +913,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     ('#000000', Color(0xFF000000)),
   ];
 
-  static const _fontSizes = <String?>[null, '13', '15', '18', '22'];
+  static const _fontSizes = <String>['13', '14', '15', '18', '22'];
 
   /// Flutter's stock Windows selection menu uses 36px rows with asymmetric
   /// text padding. Keep Quill's real clipboard callbacks, but render them in
@@ -1008,59 +992,52 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                 : null,
             fontFamilyFallback: _editorFontFallbacks,
           ),
-          child: Listener(
-            key: ValueKey('editor-pointer-listener-${project.id}'),
-            behavior: HitTestBehavior.translucent,
-            onPointerUp: (event) {
-              _selectionAnchorFor(project).value = event.localPosition;
-            },
-            child: QuillEditor(
-              key: ValueKey(project.id),
-              controller: store.controllerFor(project),
-              focusNode: _focusFor(project),
-              scrollController: _scrollFor(project),
-              config: QuillEditorConfig(
-                placeholder: '随手记…',
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                expands: true,
-                contextMenuBuilder: _buildEditorContextMenu,
-                // Explicitly register the desktop paste accelerator. Quill also
-                // inherits Flutter's editing shortcuts, but this local mapping
-                // keeps Ctrl/Cmd+V working even when another Actions scope is
-                // introduced around the panel.
-                customShortcuts: {
-                  SingleActivator(
-                    LogicalKeyboardKey.keyV,
-                    control: !_isMac,
-                    meta: _isMac,
-                  ): const PasteTextIntent(
-                    SelectionChangedCause.keyboard,
-                  ),
-                },
-                // The todo underline is derived from the custom `todo`
-                // attribute instead of a stored underline attribute, so the
-                // visual marker can never leak into neighbouring text.
-                customStyleBuilder: (attribute) {
-                  if (attribute.key != kTodoAttributeKey) {
-                    return const TextStyle();
-                  }
-                  final done = attribute.value == 'done';
-                  return TextStyle(
-                    decoration: done
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.underline,
-                    // Completed text uses the same quiet grey strike as the
-                    // todo list. Keep the open marker accented, but make it
-                    // thinner so its upper edge no longer cuts into the
-                    // bottom strokes of Chinese glyphs on Windows.
-                    decorationColor: done
-                        ? scheme.onSurfaceVariant
-                        : scheme.primary,
-                    decorationThickness: done ? 1 : 0.6,
-                    color: done ? scheme.onSurfaceVariant : null,
-                  );
-                },
-              ),
+          child: QuillEditor(
+            key: ValueKey(project.id),
+            controller: store.controllerFor(project),
+            focusNode: _focusFor(project),
+            scrollController: _scrollFor(project),
+            config: QuillEditorConfig(
+              placeholder: '随手记…',
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              expands: true,
+              contextMenuBuilder: _buildEditorContextMenu,
+              // Explicitly register the desktop paste accelerator. Quill also
+              // inherits Flutter's editing shortcuts, but this local mapping
+              // keeps Ctrl/Cmd+V working even when another Actions scope is
+              // introduced around the panel.
+              customShortcuts: {
+                SingleActivator(
+                  LogicalKeyboardKey.keyV,
+                  control: !_isMac,
+                  meta: _isMac,
+                ): const PasteTextIntent(
+                  SelectionChangedCause.keyboard,
+                ),
+              },
+              // The todo underline is derived from the custom `todo`
+              // attribute instead of a stored underline attribute, so the
+              // visual marker can never leak into neighbouring text.
+              customStyleBuilder: (attribute) {
+                if (attribute.key != kTodoAttributeKey) {
+                  return const TextStyle();
+                }
+                final done = attribute.value == 'done';
+                return TextStyle(
+                  decoration: done
+                      ? TextDecoration.lineThrough
+                      : TextDecoration.underline,
+                  // Completed text uses the same quiet grey strike as the
+                  // todo list. Keep the open marker accented, but make it
+                  // thinner so its upper edge no longer cuts into the
+                  // bottom strokes of Chinese glyphs on Windows.
+                  decorationColor: done
+                      ? scheme.onSurfaceVariant
+                      : scheme.primary,
+                  decorationThickness: done ? 1 : 0.6,
+                  color: done ? scheme.onSurfaceVariant : null,
+                );
+              },
             ),
           ),
         ),
@@ -1086,7 +1063,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   Widget _buildSelectionPanel(BuildContext context, Project project) {
     final scheme = Theme.of(context).colorScheme;
     final controller = store.controllerFor(project);
-    final anchor = _selectionAnchorFor(project);
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -1145,13 +1121,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                 }, active: attrs['header'] != null),
                 Tooltip(
                   message: '字号',
-                  child: AppMenuCombo<String?>(
+                  child: AppMenuCombo<String>(
                     key: const ValueKey('font-size-combo'),
-                    width: 52,
+                    width: 40,
                     height: 30,
-                    value: sizeValue,
+                    // No explicit size attribute means the 14px base style.
+                    value: sizeValue ?? '14',
                     items: _fontSizes,
-                    labelFor: (size) => size ?? '默认',
+                    labelFor: (size) => size,
                     onChanged: (size) {
                       controller.formatSelection(
                         Attribute.clone(Attribute.size, size),
@@ -1304,12 +1281,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           ),
         );
 
-        return ValueListenableBuilder<Offset?>(
-          valueListenable: anchor,
-          builder: (context, anchorPosition, _) => IgnorePointer(
-            ignoring: !visible,
-            child: CustomSingleChildLayout(
-              delegate: _SelectionPanelLayoutDelegate(anchor: anchorPosition),
+        // Fixed bottom-left position: the panel must not move while the
+        // selection (and thus the panel's own width) changes mid-drag.
+        return IgnorePointer(
+          ignoring: !visible,
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 12, bottom: 8),
               child: AnimatedOpacity(
                 opacity: visible ? 1 : 0,
                 duration: const Duration(milliseconds: 120),
@@ -1801,69 +1780,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       ),
     );
   }
-}
-
-class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
-  const _SelectionPanelLayoutDelegate({required this.anchor});
-
-  static const double _margin = 8;
-  static const double _gap = 10;
-
-  final Offset? anchor;
-
-  @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
-    return BoxConstraints(
-      maxWidth: (constraints.maxWidth - _margin * 2)
-          .clamp(0, double.infinity)
-          .toDouble(),
-      maxHeight: (constraints.maxHeight - _margin * 2)
-          .clamp(0, double.infinity)
-          .toDouble(),
-    );
-  }
-
-  @override
-  Offset getPositionForChild(Size size, Size childSize) {
-    final target = anchor;
-    if (target == null) {
-      return Offset(
-        ((size.width - childSize.width) / 2)
-            .clamp(
-              _margin,
-              (size.width - childSize.width - _margin).clamp(
-                _margin,
-                double.infinity,
-              ),
-            )
-            .toDouble(),
-        (size.height - childSize.height - _margin)
-            .clamp(_margin, double.infinity)
-            .toDouble(),
-      );
-    }
-
-    final maxLeft = (size.width - childSize.width - _margin).clamp(
-      _margin,
-      double.infinity,
-    );
-    final left = (target.dx - childSize.width / 2)
-        .clamp(_margin, maxLeft)
-        .toDouble();
-    var top = target.dy + _gap;
-    if (top + childSize.height > size.height - _margin) {
-      top = target.dy - childSize.height - _gap;
-    }
-    final maxTop = (size.height - childSize.height - _margin).clamp(
-      _margin,
-      double.infinity,
-    );
-    return Offset(left, top.clamp(_margin, maxTop).toDouble());
-  }
-
-  @override
-  bool shouldRelayout(_SelectionPanelLayoutDelegate oldDelegate) =>
-      anchor != oldDelegate.anchor;
 }
 
 class _SelectionColorOption extends StatelessWidget {

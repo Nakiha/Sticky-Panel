@@ -586,7 +586,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('font-size-combo')));
     await tester.pumpAndSettle();
-    expect(find.text('默认'), findsWidgets);
+    // No explicit size attribute shows the 14px base size, not a "默认".
+    expect(find.text('14'), findsWidgets);
     expect(find.text('18'), findsOneWidget);
     await tester.tap(find.text('18'));
     await tester.pumpAndSettle();
@@ -615,7 +616,7 @@ void main() {
     );
   });
 
-  testWidgets('selection panel wraps its controls and follows selection drag', (
+  testWidgets('selection panel stays pinned to the bottom-left', (
     tester,
   ) async {
     final store = await pumpTodoApp(tester);
@@ -627,21 +628,22 @@ void main() {
     await tester.pumpAndSettle();
 
     final panel = find.byKey(const ValueKey('selection-format-panel'));
-    final listenerFinder = find.byKey(
-      const ValueKey('editor-pointer-listener-p1'),
-    );
+    expect(panel, findsOneWidget);
+
+    // The panel is pinned to the editor's bottom-left corner and must not
+    // move when the selection (and thus the panel's width) changes.
+    final editor = find.byType(QuillEditor);
     expect(
-      tester.getSize(panel).width,
-      lessThan(tester.getSize(listenerFinder).width - 24),
+      tester.getTopLeft(panel).dx - tester.getTopLeft(editor).dx,
+      12,
     );
-
-    final listener = tester.widget<Listener>(listenerFinder);
-    listener.onPointerUp!(const PointerUpEvent(position: Offset(100, 80)));
-    await tester.pump();
-
-    final localTop =
-        tester.getTopLeft(panel).dy - tester.getTopLeft(listenerFinder).dy;
-    expect(localTop, 90);
+    final before = tester.getTopLeft(panel);
+    controller.updateSelection(
+      const TextSelection(baseOffset: 0, extentOffset: 1),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(panel), before);
   });
 
   testWidgets('editor uses a stable Simplified Chinese glyph fallback', (
