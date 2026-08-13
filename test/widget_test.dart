@@ -342,12 +342,22 @@ void main() {
 
     expect(clear.style?.fixedSize?.resolve({}), const Size.square(40));
     expect(expand.style?.fixedSize?.resolve({}), const Size.square(40));
-    for (final iconButton in [clear, expand, add, pin, minimize, close]) {
+    expect(add.style?.fixedSize?.resolve({}), const Size(32, 28));
+    expect(pin.style?.fixedSize?.resolve({}), const Size(32, 28));
+    for (final iconButton in [clear, expand, minimize, close]) {
       final shape = iconButton.style?.shape?.resolve({});
       expect(shape, isA<RoundedRectangleBorder>());
       expect(
         (shape! as RoundedRectangleBorder).borderRadius,
         const BorderRadius.all(Radius.circular(4)),
+      );
+    }
+    for (final iconButton in [add, pin]) {
+      final shape = iconButton.style?.shape?.resolve({});
+      expect(shape, isA<RoundedRectangleBorder>());
+      expect(
+        (shape! as RoundedRectangleBorder).borderRadius,
+        const BorderRadius.all(Radius.circular(7)),
       );
     }
     for (final iconButton in [expand, add, pin, minimize]) {
@@ -374,6 +384,67 @@ void main() {
     );
     expect(clear.style?.animationDuration, const Duration(milliseconds: 140));
     expect(close.style?.animationDuration, const Duration(milliseconds: 140));
+  });
+
+  testWidgets('title bar follows Edge pin-tab-add ordering and alignment', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    store.addProject('项目2');
+    await tester.pumpAndSettle();
+
+    final pin = find.byTooltip('取消置顶');
+    final firstTab = find.byKey(const ValueKey('project-tab-p1'));
+    final lastTab = find.byKey(
+      ValueKey('project-tab-${store.projects.last.id}'),
+    );
+    final firstTabSurface = find.descendant(
+      of: firstTab,
+      matching: find.byType(AnimatedContainer),
+    );
+    final lastTabSurface = find.descendant(
+      of: lastTab,
+      matching: find.byType(AnimatedContainer),
+    );
+    final add = find.byTooltip('新建项目');
+    final minimize = find.byTooltip('最小化');
+
+    final pinRect = tester.getRect(pin);
+    final firstTabSurfaceRect = tester.getRect(firstTabSurface);
+    final lastTabSurfaceRect = tester.getRect(lastTabSurface);
+    final addRect = tester.getRect(add);
+    expect(firstTabSurfaceRect.left - pinRect.right, 2);
+    expect(addRect.left - lastTabSurfaceRect.right, 2);
+    expect(pinRect.top, firstTabSurfaceRect.top);
+    expect(addRect.top, lastTabSurfaceRect.top);
+    expect(pinRect.height, 28);
+    expect(addRect.height, 28);
+    expect(tester.getSize(minimize), const Size(40, 36));
+  });
+
+  testWidgets('editor todo markers use a low accent line and grey done line', (
+    tester,
+  ) async {
+    await pumpTodoApp(tester);
+
+    final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
+    final styleBuilder = editor.config.customStyleBuilder!;
+    final openStyle = styleBuilder(
+      Attribute(kTodoAttributeKey, AttributeScope.inline, 'open'),
+    );
+    final doneStyle = styleBuilder(
+      Attribute(kTodoAttributeKey, AttributeScope.inline, 'done'),
+    );
+    final scheme = Theme.of(
+      tester.element(find.byType(QuillEditor)),
+    ).colorScheme;
+
+    expect(openStyle.decoration, TextDecoration.underline);
+    expect(openStyle.decorationColor, scheme.primary);
+    expect(openStyle.decorationThickness, 0.6);
+    expect(doneStyle.decoration, TextDecoration.lineThrough);
+    expect(doneStyle.decorationColor, scheme.onSurfaceVariant);
+    expect(doneStyle.color, scheme.onSurfaceVariant);
   });
 
   testWidgets('todo header gives visual feedback on hover', (tester) async {
@@ -641,14 +712,18 @@ void main() {
   testWidgets('close button asks for confirmation', (tester) async {
     await pumpTodoApp(tester);
 
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).title,
+      kAppDisplayName,
+    );
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
-    expect(find.text('关闭 Sticky Panel'), findsOneWidget);
+    expect(find.text('关闭$kAppDisplayName'), findsOneWidget);
     expect(find.text('确定要关闭吗？所有内容都已自动保存。'), findsOneWidget);
 
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    expect(find.text('关闭 Sticky Panel'), findsNothing);
+    expect(find.text('关闭$kAppDisplayName'), findsNothing);
   });
 
   testWidgets('Windows tray close offers and remembers hide or exit', (
@@ -656,12 +731,12 @@ void main() {
   ) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    final trayCalls = <String>[];
+    final trayCalls = <MethodCall>[];
     final windowCalls = <String>[];
     messenger.setMockMethodCallHandler(const MethodChannel('tray_manager'), (
       call,
     ) async {
-      trayCalls.add(call.method);
+      trayCalls.add(call);
       return null;
     });
     messenger.setMockMethodCallHandler(const MethodChannel('window_manager'), (
@@ -683,7 +758,17 @@ void main() {
 
     final store = await pumpTodoApp(tester, enableSystemTray: true);
     await tester.pumpAndSettle();
-    expect(trayCalls, containsAll(['setIcon', 'setToolTip', 'setContextMenu']));
+    expect(
+      trayCalls.map((call) => call.method),
+      containsAll(['setIcon', 'setToolTip', 'setContextMenu']),
+    );
+    expect(
+      trayCalls
+          .singleWhere((call) => call.method == 'setToolTip')
+          .arguments
+          .toString(),
+      contains(kAppDisplayName),
+    );
 
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();

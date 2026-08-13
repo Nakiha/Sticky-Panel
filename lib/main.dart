@@ -14,7 +14,7 @@ Future<void> main() async {
     size: Size(380, 620),
     minimumSize: Size(300, 360),
     center: true,
-    title: 'Sticky Panel',
+    title: kAppDisplayName,
     titleBarStyle: TitleBarStyle.hidden,
   );
 

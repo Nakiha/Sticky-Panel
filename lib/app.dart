@@ -15,6 +15,7 @@ import 'widgets/app_menu_combo.dart';
 
 const _defaultProjectBlue = Color(0xFF007AFF);
 const _defaultProjectBlueDark = Color(0xFF0A84FF);
+const kAppDisplayName = '随手记';
 
 typedef _TodoGroup = ({String label, Project project, List<TodoSpan> todos});
 typedef _TodoTileIdentity = ({
@@ -40,7 +41,7 @@ class StickyPanelApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sticky Panel',
+      title: kAppDisplayName,
       debugShowCheckedModeBanner: false,
       locale: const Locale('zh', 'CN'),
       localizationsDelegates: const [
@@ -207,11 +208,11 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   Future<void> _initSystemTray() async {
     try {
       await trayManager.setIcon(_trayIconAsset);
-      await trayManager.setToolTip('Sticky Panel');
+      await trayManager.setToolTip(kAppDisplayName);
       await trayManager.setContextMenu(
         Menu(
           items: [
-            MenuItem(key: _trayShowKey, label: '显示 Sticky Panel'),
+            MenuItem(key: _trayShowKey, label: '显示$kAppDisplayName'),
             MenuItem.separator(),
             MenuItem(key: _trayResetCloseKey, label: '恢复关闭时询问'),
             MenuItem.separator(),
@@ -305,7 +306,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           builder: (context) => StatefulBuilder(
             builder: (context, setDialogState) => AlertDialog(
               title: const Text(
-                '关闭 Sticky Panel',
+                '关闭$kAppDisplayName',
                 style: TextStyle(fontSize: 15),
               ),
               content: Column(
@@ -368,7 +369,10 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: const Text('关闭 Sticky Panel', style: TextStyle(fontSize: 15)),
+          title: const Text(
+            '关闭$kAppDisplayName',
+            style: TextStyle(fontSize: 15),
+          ),
           content: const Text('确定要关闭吗？所有内容都已自动保存。'),
           actions: [
             TextButton(
@@ -505,9 +509,9 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
   // ------------------------------------------------------------------ top bar
 
-  /// Chrome-style tab strip: full-height tabs flush with the content below,
-  /// a trailing "+" tab, and only the pin button on the right. The whole
-  /// strip is draggable.
+  /// Edge-style title bar: pin first, then the project tabs and a trailing
+  /// add button that stays attached to the last tab. Only the native window
+  /// controls consume the full title-bar height.
   Widget _buildTopBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
@@ -524,25 +528,37 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           children: [
             // macOS keeps its native traffic lights with a hidden title bar.
             if (_isMac) const SizedBox(width: 72),
-            Expanded(
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: store.projects.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 2),
-                itemBuilder: (context, index) =>
-                    _buildTab(context, store.projects[index], index),
-              ),
-            ),
-            _titleBarIcon(
-              Icons.add,
-              '新建项目',
-              () => _editProjectName(context, null),
-            ),
-            _titleBarIcon(
+            _tabStripIcon(
               _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
               _alwaysOnTop ? '取消置顶' : '窗口置顶',
               _toggleAlwaysOnTop,
               active: _alwaysOnTop,
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: SingleChildScrollView(
+                key: const ValueKey('project-tab-strip'),
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (
+                      var index = 0;
+                      index < store.projects.length;
+                      index++
+                    ) ...[
+                      if (index > 0) const SizedBox(width: 2),
+                      _buildTab(context, store.projects[index], index),
+                    ],
+                    if (store.projects.isNotEmpty) const SizedBox(width: 2),
+                    _tabStripIcon(
+                      Icons.add,
+                      '新建项目',
+                      () => _editProjectName(context, null),
+                    ),
+                  ],
+                ),
+              ),
             ),
             if (!_isMac) ...[
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
@@ -550,6 +566,29 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _tabStripIcon(
+    IconData icon,
+    String tooltip,
+    VoidCallback onPressed, {
+    bool active = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, size: 17),
+        style: _panelIconButtonStyle(
+          scheme,
+          size: const Size(32, 28),
+          active: active,
+          borderRadius: 7,
+        ),
+        onPressed: onPressed,
       ),
     );
   }
@@ -606,6 +645,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     required Size size,
     bool active = false,
     bool danger = false,
+    double borderRadius = 4,
   }) {
     return ButtonStyle(
       fixedSize: WidgetStatePropertyAll(size),
@@ -613,9 +653,9 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       maximumSize: WidgetStatePropertyAll(size),
       padding: const WidgetStatePropertyAll(EdgeInsets.zero),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      shape: const WidgetStatePropertyAll(
+      shape: WidgetStatePropertyAll(
         RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(4)),
+          borderRadius: BorderRadius.all(Radius.circular(borderRadius)),
         ),
       ),
       animationDuration: const Duration(milliseconds: 140),
@@ -973,7 +1013,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     decoration: done
                         ? TextDecoration.lineThrough
                         : TextDecoration.underline,
-                    decorationColor: scheme.primary,
+                    // Completed text uses the same quiet grey strike as the
+                    // todo list. Keep the open marker accented, but make it
+                    // thinner so its upper edge no longer cuts into the
+                    // bottom strokes of Chinese glyphs on Windows.
+                    decorationColor: done
+                        ? scheme.onSurfaceVariant
+                        : scheme.primary,
+                    decorationThickness: done ? 1 : 0.6,
                     color: done ? scheme.onSurfaceVariant : null,
                   );
                 },

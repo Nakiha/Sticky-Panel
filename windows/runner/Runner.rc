@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.nakiha" "\0"
-            VALUE "FileDescription", "sticky_panel" "\0"
+            VALUE "FileDescription", "随手记" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "sticky_panel" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.nakiha. All rights reserved." "\0"
             VALUE "OriginalFilename", "sticky_panel.exe" "\0"
-            VALUE "ProductName", "sticky_panel" "\0"
+            VALUE "ProductName", "随手记" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
