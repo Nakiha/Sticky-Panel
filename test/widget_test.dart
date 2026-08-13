@@ -507,10 +507,7 @@ void main() {
     final close = find.byWidget(closeButton);
     final scaffold = find.byType(Scaffold);
 
-    expect(
-      tester.getTopLeft(pin).dx - tester.getTopLeft(scaffold).dx,
-      4,
-    );
+    expect(tester.getTopLeft(pin).dx - tester.getTopLeft(scaffold).dx, 4);
     expect(tester.getBottomRight(close).dx, tester.getBottomRight(scaffold).dx);
   });
 
@@ -616,7 +613,7 @@ void main() {
     );
   });
 
-  testWidgets('selection panel stays pinned to the bottom-left', (
+  testWidgets('selection panel hides mid-drag and docks at pointer-up', (
     tester,
   ) async {
     final store = await pumpTodoApp(tester);
@@ -630,20 +627,27 @@ void main() {
     final panel = find.byKey(const ValueKey('selection-format-panel'));
     expect(panel, findsOneWidget);
 
-    // The panel is pinned to the editor's bottom-left corner and must not
-    // move when the selection (and thus the panel's width) changes.
+    // Keyboard/programmatic selection: bottom-left fallback.
     final editor = find.byType(QuillEditor);
-    expect(
-      tester.getTopLeft(panel).dx - tester.getTopLeft(editor).dx,
-      12,
+    expect(tester.getTopLeft(panel).dx - tester.getTopLeft(editor).dx, 12);
+
+    // While the pointer is down the panel hides...
+    final listener = tester.widget<Listener>(
+      find.byKey(const ValueKey('editor-pointer-listener-p1')),
     );
-    final before = tester.getTopLeft(panel);
-    controller.updateSelection(
-      const TextSelection(baseOffset: 0, extentOffset: 1),
-      ChangeSource.local,
+    listener.onPointerDown!(const PointerDownEvent(position: Offset(50, 40)));
+    await tester.pump();
+    final opacityHidden = tester.widget<AnimatedOpacity>(
+      find.ancestor(of: panel, matching: find.byType(AnimatedOpacity)),
     );
-    await tester.pumpAndSettle();
-    expect(tester.getTopLeft(panel), before);
+    expect(opacityHidden.opacity, 0);
+
+    // ...and on release it docks next to the pointer (10px gap below).
+    listener.onPointerUp!(const PointerUpEvent(position: Offset(100, 80)));
+    await tester.pump();
+    final topAfterRelease =
+        tester.getTopLeft(panel).dy - tester.getTopLeft(editor).dy;
+    expect(topAfterRelease, 90);
   });
 
   testWidgets('editor uses a stable Simplified Chinese glyph fallback', (

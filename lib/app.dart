@@ -133,6 +133,17 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   final _editorFocusNodes = <String, FocusNode>{};
   final _editorScrollControllers = <String, ScrollController>{};
 
+  /// Where the selection panel appears, captured on pointer-up (i.e. where
+  /// the mouse rests when the drag selection finishes). Null until the
+  /// first pointer selection.
+  final _selectionPanelAnchors = <String, ValueNotifier<Offset?>>{};
+
+  /// True while the pointer is down in the editor: the panel stays hidden
+  /// during the drag so it can't fly around, and appears on release.
+  /// A ValueNotifier so the (cached) editor widget subtree rebuilds even
+  /// though HomePage-level setState cannot reach into the cache.
+  final _selectingNotifier = ValueNotifier<bool>(false);
+
   AppStore get store => widget.store;
 
   @override
@@ -152,6 +163,12 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   ScrollController _scrollFor(Project project) =>
       _editorScrollControllers.putIfAbsent(project.id, ScrollController.new);
 
+  ValueNotifier<Offset?> _selectionAnchorFor(Project project) =>
+      _selectionPanelAnchors.putIfAbsent(
+        project.id,
+        () => ValueNotifier<Offset?>(null),
+      );
+
   void _pruneEditorAttachments() {
     final live = store.projects.map((p) => p.id).toSet();
     for (final id
@@ -163,6 +180,12 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             .where((id) => !live.contains(id))
             .toList()) {
       _editorScrollControllers.remove(id)?.dispose();
+    }
+    for (final id
+        in _selectionPanelAnchors.keys
+            .where((id) => !live.contains(id))
+            .toList()) {
+      _selectionPanelAnchors.remove(id)?.dispose();
     }
     _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
   }
@@ -180,6 +203,10 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     for (final controller in _editorScrollControllers.values) {
       controller.dispose();
     }
+    for (final anchor in _selectionPanelAnchors.values) {
+      anchor.dispose();
+    }
+    _selectingNotifier.dispose();
     super.dispose();
   }
 
@@ -992,52 +1019,64 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                 : null,
             fontFamilyFallback: _editorFontFallbacks,
           ),
-          child: QuillEditor(
-            key: ValueKey(project.id),
-            controller: store.controllerFor(project),
-            focusNode: _focusFor(project),
-            scrollController: _scrollFor(project),
-            config: QuillEditorConfig(
-              placeholder: '随手记…',
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              expands: true,
-              contextMenuBuilder: _buildEditorContextMenu,
-              // Explicitly register the desktop paste accelerator. Quill also
-              // inherits Flutter's editing shortcuts, but this local mapping
-              // keeps Ctrl/Cmd+V working even when another Actions scope is
-              // introduced around the panel.
-              customShortcuts: {
-                SingleActivator(
-                  LogicalKeyboardKey.keyV,
-                  control: !_isMac,
-                  meta: _isMac,
-                ): const PasteTextIntent(
-                  SelectionChangedCause.keyboard,
-                ),
-              },
-              // The todo underline is derived from the custom `todo`
-              // attribute instead of a stored underline attribute, so the
-              // visual marker can never leak into neighbouring text.
-              customStyleBuilder: (attribute) {
-                if (attribute.key != kTodoAttributeKey) {
-                  return const TextStyle();
-                }
-                final done = attribute.value == 'done';
-                return TextStyle(
-                  decoration: done
-                      ? TextDecoration.lineThrough
-                      : TextDecoration.underline,
-                  // Completed text uses the same quiet grey strike as the
-                  // todo list. Keep the open marker accented, but make it
-                  // thinner so its upper edge no longer cuts into the
-                  // bottom strokes of Chinese glyphs on Windows.
-                  decorationColor: done
-                      ? scheme.onSurfaceVariant
-                      : scheme.primary,
-                  decorationThickness: done ? 1 : 0.6,
-                  color: done ? scheme.onSurfaceVariant : null,
-                );
-              },
+          child: Listener(
+            key: ValueKey('editor-pointer-listener-${project.id}'),
+            behavior: HitTestBehavior.translucent,
+            // Track drag selection: the panel hides while the pointer is
+            // down and reappears next to the cursor on release.
+            onPointerDown: (_) => _selectingNotifier.value = true,
+            onPointerUp: (event) {
+              _selectionAnchorFor(project).value = event.localPosition;
+              _selectingNotifier.value = false;
+            },
+            onPointerCancel: (_) => _selectingNotifier.value = false,
+            child: QuillEditor(
+              key: ValueKey(project.id),
+              controller: store.controllerFor(project),
+              focusNode: _focusFor(project),
+              scrollController: _scrollFor(project),
+              config: QuillEditorConfig(
+                placeholder: '随手记…',
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                expands: true,
+                contextMenuBuilder: _buildEditorContextMenu,
+                // Explicitly register the desktop paste accelerator. Quill also
+                // inherits Flutter's editing shortcuts, but this local mapping
+                // keeps Ctrl/Cmd+V working even when another Actions scope is
+                // introduced around the panel.
+                customShortcuts: {
+                  SingleActivator(
+                    LogicalKeyboardKey.keyV,
+                    control: !_isMac,
+                    meta: _isMac,
+                  ): const PasteTextIntent(
+                    SelectionChangedCause.keyboard,
+                  ),
+                },
+                // The todo underline is derived from the custom `todo`
+                // attribute instead of a stored underline attribute, so the
+                // visual marker can never leak into neighbouring text.
+                customStyleBuilder: (attribute) {
+                  if (attribute.key != kTodoAttributeKey) {
+                    return const TextStyle();
+                  }
+                  final done = attribute.value == 'done';
+                  return TextStyle(
+                    decoration: done
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.underline,
+                    // Completed text uses the same quiet grey strike as the
+                    // todo list. Keep the open marker accented, but make it
+                    // thinner so its upper edge no longer cuts into the
+                    // bottom strokes of Chinese glyphs on Windows.
+                    decorationColor: done
+                        ? scheme.onSurfaceVariant
+                        : scheme.primary,
+                    decorationThickness: done ? 1 : 0.6,
+                    color: done ? scheme.onSurfaceVariant : null,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -1064,10 +1103,13 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     final scheme = Theme.of(context).colorScheme;
     final controller = store.controllerFor(project);
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge([controller, _selectingNotifier]),
       builder: (context, _) {
         final selection = controller.selection;
-        final visible = selection.isValid && !selection.isCollapsed;
+        final visible =
+            selection.isValid &&
+            !selection.isCollapsed &&
+            !_selectingNotifier.value;
         final attrs = controller.getSelectionStyle().attributes;
 
         Widget iconBtn(
@@ -1281,14 +1323,15 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           ),
         );
 
-        // Fixed bottom-left position: the panel must not move while the
-        // selection (and thus the panel's own width) changes mid-drag.
-        return IgnorePointer(
-          ignoring: !visible,
-          child: Align(
-            alignment: Alignment.bottomLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 12, bottom: 8),
+        // The panel is hidden during drag selection (visible=false) and
+        // appears next to the pointer-up position; without a pointer anchor
+        // (keyboard selection) it falls back to the bottom-left corner.
+        return ValueListenableBuilder<Offset?>(
+          valueListenable: _selectionAnchorFor(project),
+          builder: (context, anchor, _) => IgnorePointer(
+            ignoring: !visible,
+            child: CustomSingleChildLayout(
+              delegate: _SelectionPanelLayoutDelegate(anchor: anchor),
               child: AnimatedOpacity(
                 opacity: visible ? 1 : 0,
                 duration: const Duration(milliseconds: 120),
@@ -1780,6 +1823,60 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       ),
     );
   }
+}
+
+/// Positions the selection panel: next to the pointer-up spot when a drag
+/// selection set an anchor, otherwise at the bottom-left corner.
+class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
+  const _SelectionPanelLayoutDelegate({required this.anchor});
+
+  static const double _margin = 8;
+  static const double _gap = 10;
+
+  final Offset? anchor;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    return BoxConstraints(
+      maxWidth: (constraints.maxWidth - _margin * 2)
+          .clamp(0, double.infinity)
+          .toDouble(),
+      maxHeight: (constraints.maxHeight - _margin * 2)
+          .clamp(0, double.infinity)
+          .toDouble(),
+    );
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final maxLeft = (size.width - childSize.width - _margin).clamp(
+      _margin,
+      double.infinity,
+    );
+    final maxTop = (size.height - childSize.height - _margin).clamp(
+      _margin,
+      double.infinity,
+    );
+
+    final target = anchor;
+    if (target == null) {
+      // Bottom-left fallback (keyboard selections).
+      return Offset(12, maxTop.toDouble());
+    }
+
+    final left = (target.dx - childSize.width / 2)
+        .clamp(_margin, maxLeft)
+        .toDouble();
+    var top = target.dy + _gap;
+    if (top + childSize.height > size.height - _margin) {
+      top = target.dy - childSize.height - _gap;
+    }
+    return Offset(left, top.clamp(_margin, maxTop).toDouble());
+  }
+
+  @override
+  bool shouldRelayout(_SelectionPanelLayoutDelegate oldDelegate) =>
+      anchor != oldDelegate.anchor;
 }
 
 class _SelectionColorOption extends StatelessWidget {
