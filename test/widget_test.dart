@@ -318,8 +318,13 @@ void main() {
   testWidgets('Windows editor context menu is localized and compact',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final store = await pumpTodoApp(tester);
+    late AppStore store;
+    try {
+      store = await pumpTodoApp(tester);
+    } finally {
+      // Foundation invariants are verified before addTearDown callbacks.
+      debugDefaultTargetPlatformOverride = null;
+    }
     final project = store.selected!;
     store.controllerFor(project).updateSelection(
           const TextSelection(baseOffset: 0, extentOffset: 2),
