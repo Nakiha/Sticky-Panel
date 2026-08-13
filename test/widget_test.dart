@@ -253,11 +253,11 @@ void main() {
 
     expect(tester.getSize(panel).height, 180);
     await tester.drag(header, const Offset(0, -90));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tester.getSize(panel).height, greaterThan(180));
 
     await tester.drag(header, const Offset(0, 1000));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tester.getSize(panel).height, 40);
   });
 
