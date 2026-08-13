@@ -419,7 +419,11 @@ void main() {
     final firstTabSurfaceRect = tester.getRect(firstTabSurface);
     final lastTabSurfaceRect = tester.getRect(lastTabSurface);
     final addRect = tester.getRect(add);
-    expect(firstTabSurfaceRect.left - pinRect.right, 2);
+    final scaffoldRect = tester.getRect(find.byType(Scaffold));
+    expect(pinRect.left - scaffoldRect.left, 4);
+    expect(firstTabSurfaceRect.left - pinRect.right, 4);
+    expect(pinRect.top - scaffoldRect.top, 4);
+    expect(scaffoldRect.top + 36 - pinRect.bottom, 4);
     expect(addRect.left - lastTabSurfaceRect.right, 2);
     // AnimatedContainer's render box includes the tab's 4 px top margin;
     // compare the visible button edge with the decorated tab edge instead.
@@ -489,7 +493,9 @@ void main() {
     expect(decoration.color, const Color(0xFF007AFF));
   });
 
-  testWidgets('top bar controls touch both window edges', (tester) async {
+  testWidgets('top bar keeps a balanced pin inset and flush close edge', (
+    tester,
+  ) async {
     await pumpTodoApp(tester);
     final pinButton = tester
         .widgetList<IconButton>(find.byType(IconButton))
@@ -501,7 +507,10 @@ void main() {
     final close = find.byWidget(closeButton);
     final scaffold = find.byType(Scaffold);
 
-    expect(tester.getTopLeft(pin).dx, tester.getTopLeft(scaffold).dx);
+    expect(
+      tester.getTopLeft(pin).dx - tester.getTopLeft(scaffold).dx,
+      4,
+    );
     expect(tester.getBottomRight(close).dx, tester.getBottomRight(scaffold).dx);
   });
 
@@ -807,10 +816,16 @@ void main() {
     trayCalls.clear();
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
     await tester.tap(find.text('退出应用'));
     await tester.pumpAndSettle();
-    expect(windowCalls, containsAllInOrder(['setPreventClose', 'destroy']));
-    expect(windowCalls, isNot(contains('close')));
+    expect(
+      windowCalls,
+      containsAllInOrder(['hide', 'setPreventClose', 'close']),
+    );
+    expect(windowCalls, isNot(contains('destroy')));
     expect(trayCalls.map((call) => call.method), contains('destroy'));
+    expect(store.closePreference, ClosePreference.exitApplication);
   });
 }

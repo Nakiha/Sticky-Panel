@@ -235,9 +235,23 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     await windowManager.focus();
   }
 
-  Future<void> _exitApplication() async {
+  Future<void> _exitApplication({ClosePreference? rememberPreference}) async {
     if (_exitRequested) return;
     _exitRequested = true;
+    // Remove the window immediately so the user never watches a frozen final
+    // frame while preferences and plugins finish their shutdown work.
+    try {
+      await windowManager.hide();
+    } catch (error) {
+      debugPrint('Failed to hide window before exit: $error');
+    }
+    if (rememberPreference != null) {
+      try {
+        await store.setClosePreference(rememberPreference);
+      } catch (error) {
+        debugPrint('Failed to persist close preference: $error');
+      }
+    }
     // Flush the latest editor state before tearing down the engine. The
     // regular edit listener persists asynchronously, so an immediate native
     // quit must not race the final SharedPreferences write.
@@ -255,21 +269,20 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         debugPrint('Failed to destroy system tray: $error');
       }
     }
-    // window_manager's Windows destroy() posts WM_QUIT directly. Unlike the
-    // old post-frame close, it works while the window is hidden and does not
-    // re-enter onWindowClose after the user has already confirmed exiting.
+    // Release interception, then close the native window normally. On Windows
+    // this posts SC_CLOSE, destroys the HWND immediately, and lets the runner's
+    // SetQuitOnClose path stop the message loop after the window is gone.
     try {
       await windowManager.setPreventClose(false);
     } catch (error) {
       debugPrint('Failed to release close interception: $error');
     }
     try {
-      await windowManager.destroy();
-    } catch (error) {
-      // close() is still a useful fallback here because it is dispatched
-      // immediately instead of waiting for a Flutter frame.
-      debugPrint('Failed to destroy native window: $error');
       await windowManager.close();
+    } catch (error) {
+      // destroy() remains a last-resort process-loop fallback.
+      debugPrint('Failed to close native window: $error');
+      await windowManager.destroy();
     }
   }
 
@@ -304,7 +317,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   }
 
   Future<void> _requestClose() async {
-    if (_closeDialogOpen || !mounted) return;
+    if (_exitRequested || _closeDialogOpen || !mounted) return;
     _closeDialogOpen = true;
     try {
       final canUseTray = widget.enableSystemTray && _trayReady;
@@ -372,17 +385,17 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         );
         if (choice == null) return;
 
-        if (rememberChoice) {
-          await store.setClosePreference(
-            choice == _CloseChoice.hideToTray
-                ? ClosePreference.hideToTray
-                : ClosePreference.exitApplication,
-          );
-        }
         if (choice == _CloseChoice.hideToTray) {
           await windowManager.hide();
+          if (rememberChoice) {
+            await store.setClosePreference(ClosePreference.hideToTray);
+          }
         } else {
-          await _exitApplication();
+          await _exitApplication(
+            rememberPreference: rememberChoice
+                ? ClosePreference.exitApplication
+                : null,
+          );
         }
         return;
       }
@@ -555,8 +568,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
               _alwaysOnTop ? '取消置顶' : '窗口置顶',
               _toggleAlwaysOnTop,
               active: _alwaysOnTop,
+              padding: const EdgeInsets.all(4),
             ),
-            const SizedBox(width: 2),
             Expanded(
               child: SingleChildScrollView(
                 key: const ValueKey('project-tab-strip'),
@@ -597,10 +610,11 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     String tooltip,
     VoidCallback onPressed, {
     bool active = false,
+    EdgeInsetsGeometry padding = const EdgeInsets.symmetric(vertical: 4),
   }) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: padding,
       child: IconButton(
         tooltip: tooltip,
         icon: Icon(icon, size: 17),
