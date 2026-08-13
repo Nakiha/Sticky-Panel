@@ -38,7 +38,11 @@ dependencies:
   cupertino_icons: ^1.0.8
   window_manager: ^0.4.3
   shared_preferences: ^2.3.2
-  flutter_quill: ^11.0.0
+  # Vendored fork with a caret-height patch: the caret now follows the
+  # laid-out line height instead of the paragraph base style, so it matches
+  # text with an inline size attribute. See vendor/flutter_quill PATCH notes.
+  flutter_quill:
+    path: vendor/flutter_quill
   tray_manager: ^0.5.3
 
 dev_dependencies:
