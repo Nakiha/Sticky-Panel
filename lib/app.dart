@@ -1119,11 +1119,11 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           bool active = false,
         }) {
           return IconButton(
-            icon: Icon(icon, size: 17),
+            icon: Icon(icon, size: 16),
             tooltip: tooltip,
             style: _panelIconButtonStyle(
               scheme,
-              size: const Size.square(36),
+              size: const Size.square(32),
               active: active,
             ),
             onPressed: onPressed,
@@ -1141,8 +1141,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           elevation: 3,
           borderRadius: BorderRadius.circular(10),
           child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 3),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: scheme.outlineVariant),
@@ -1166,7 +1166,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                   child: AppMenuCombo<String>(
                     key: const ValueKey('font-size-combo'),
                     width: 40,
-                    height: 30,
+                    height: 26,
                     // No explicit size attribute means the 14px base style.
                     value: sizeValue ?? '14',
                     items: _fontSizes,
@@ -1199,7 +1199,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                   child: AppMenuCombo<(String?, Color)>(
                     key: const ValueKey('text-color-combo'),
                     width: 44,
-                    height: 30,
+                    height: 26,
                     value: _textColors.firstWhere(
                       (option) => option.$1 == textColor,
                       orElse: () => _textColors.first,
@@ -1252,7 +1252,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                   child: AppMenuCombo<(String?, Color)>(
                     key: const ValueKey('background-color-combo'),
                     width: 44,
-                    height: 30,
+                    height: 26,
                     value: _highlights.firstWhere(
                       (option) => option.$1 == background,
                       orElse: () => _highlights.first,
@@ -1831,7 +1831,7 @@ class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
   const _SelectionPanelLayoutDelegate({required this.anchor});
 
   static const double _margin = 8;
-  static const double _gap = 10;
+  static const double _gap = 14;
 
   final Offset? anchor;
 

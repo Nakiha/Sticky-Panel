@@ -642,12 +642,12 @@ void main() {
     );
     expect(opacityHidden.opacity, 0);
 
-    // ...and on release it docks next to the pointer (10px gap below).
+    // ...and on release it docks next to the pointer (14px gap below).
     listener.onPointerUp!(const PointerUpEvent(position: Offset(100, 80)));
     await tester.pump();
     final topAfterRelease =
         tester.getTopLeft(panel).dy - tester.getTopLeft(editor).dy;
-    expect(topAfterRelease, 90);
+    expect(topAfterRelease, 94);
   });
 
   testWidgets('editor uses a stable Simplified Chinese glyph fallback', (

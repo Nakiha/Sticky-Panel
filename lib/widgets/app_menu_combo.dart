@@ -512,11 +512,16 @@ class _MenuSurface<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Material(
-      color: theme.colorScheme.surfaceContainerHigh,
-      elevation: 3,
-      shadowColor: theme.colorScheme.shadow.withValues(alpha: 0.18),
+      // surfaceContainerHigh is nearly identical to the editor background
+      // in dark mode, which made the menu melt into the page.
+      color: theme.colorScheme.surfaceContainerHighest,
+      elevation: 6,
+      shadowColor: theme.colorScheme.shadow.withValues(alpha: 0.28),
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),

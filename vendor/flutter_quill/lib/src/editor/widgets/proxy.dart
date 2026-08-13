@@ -270,26 +270,18 @@ class RenderParagraphProxy extends RenderProxyBox
   @override
   RenderParagraph? get child => super.child as RenderParagraph?;
 
-  // PATCH (sticky_panel): the prototype painter is built from the line's
-  // paragraph base style, so the caret kept the base font height even when
-  // the line's spans carried a larger inline `size` attribute. Each TextLine
-  // widget lays out exactly one visual line, so the child paragraph's
-  // laid-out height IS the real line height. Reading it during layout is
-  // illegal (size access scope), so it is captured at paint time instead.
-  double? _paintedLineHeight;
-
   @override
-  void paint(PaintingContext context, Offset offset) {
-    final renderChild = child;
-    if (renderChild != null && renderChild.hasSize) {
-      _paintedLineHeight = renderChild.size.height;
-    }
-    super.paint(context, offset);
+  double get preferredLineHeight {
+    // PATCH (sticky_panel): the prototype painter is built from the line's
+    // paragraph base style, so the caret kept the base font height even
+    // when the line's spans carried a larger inline `size` attribute. Each
+    // TextLine widget lays out exactly one visual line, and text_line calls
+    // this only after the body has been laid out, so our own size.height IS
+    // the real line height. (Reading child.size here is illegal mid-layout;
+    // reading our own size is always allowed.)
+    if (hasSize) return size.height;
+    return _prototypePainter.preferredLineHeight;
   }
-
-  @override
-  double get preferredLineHeight =>
-      _paintedLineHeight ?? _prototypePainter.preferredLineHeight;
 
   @override
   Offset getOffsetForCaret(TextPosition position, Rect caretPrototype) =>
