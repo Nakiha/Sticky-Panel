@@ -421,8 +421,10 @@ void main() {
     final addRect = tester.getRect(add);
     expect(firstTabSurfaceRect.left - pinRect.right, 2);
     expect(addRect.left - lastTabSurfaceRect.right, 2);
-    expect(pinRect.top, firstTabSurfaceRect.top);
-    expect(addRect.top, lastTabSurfaceRect.top);
+    // AnimatedContainer's render box includes the tab's 4 px top margin;
+    // compare the visible button edge with the decorated tab edge instead.
+    expect(pinRect.top - firstTabSurfaceRect.top, 4);
+    expect(addRect.top - lastTabSurfaceRect.top, 4);
     expect(pinRect.height, 28);
     expect(addRect.height, 28);
     expect(tester.getSize(minimize), const Size(40, 36));
