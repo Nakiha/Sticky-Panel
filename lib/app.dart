@@ -1615,17 +1615,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    AnimatedSwitcher(
-                      duration: _todoMotion,
-                      transitionBuilder: (child, animation) =>
-                          FadeTransition(opacity: animation, child: child),
-                      child: Text(
-                        '剩余 $remaining / 共 $total',
-                        key: ValueKey('$remaining:$total'),
-                        style: TextStyle(
-                          fontSize: _todoTextSize,
-                          color: scheme.onSurfaceVariant,
-                        ),
+                    // Plain text, no AnimatedSwitcher: its default layout
+                    // centers the old/new children while cross-fading, so a
+                    // width change made the count visibly wobble.
+                    Text(
+                      '剩余 $remaining / 共 $total',
+                      style: TextStyle(
+                        fontSize: _todoTextSize,
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
                   ],
