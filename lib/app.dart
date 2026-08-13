@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' hide MenuItem;
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart';
@@ -296,6 +296,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           case ClosePreference.ask:
             break;
         }
+        if (!mounted) return;
 
         var rememberChoice = false;
         final choice = await showDialog<_CloseChoice>(
