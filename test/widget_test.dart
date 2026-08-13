@@ -196,8 +196,6 @@ void main() {
   });
 
   Future<AppStore> pumpTodoApp(WidgetTester tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final document = jsonEncode([
       {'insert': '阶段一'},
       {

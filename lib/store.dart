@@ -54,11 +54,10 @@ class AppStore extends ChangeNotifier {
         final pending = pendingTodoFormat;
         pendingTodoFormat = null;
         if (pending != null) {
-          controller.formatText(
+          controller.document.format(
             pending.index,
             pending.length,
             todoAttribute(pending.state),
-            shouldNotifyListeners: false,
           );
         }
         _onDocumentChanged(project, controller);
