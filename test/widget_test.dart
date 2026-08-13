@@ -14,7 +14,11 @@ import 'package:sticky_panel/todos.dart';
 
 void main() {
   test('project json round-trip preserves the document', () {
-    final project = Project(id: 'p1', name: '项目A', docJson: '[{"insert":"hi\\n"}]');
+    final project = Project(
+      id: 'p1',
+      name: '项目A',
+      docJson: '[{"insert":"hi\\n"}]',
+    );
     final restored = Project.fromJson(jsonDecode(jsonEncode(project.toJson())));
     expect(restored.id, 'p1');
     expect(restored.name, '项目A');
@@ -26,12 +30,12 @@ void main() {
       {'insert': '随便记点东西\n'},
       {
         'insert': '跟进合同',
-        'attributes': {'todo': 'open', 'underline': true}
+        'attributes': {'todo': 'open', 'underline': true},
       },
       {'insert': '\n普通行\n'},
       {
         'insert': '已完成的事',
-        'attributes': {'todo': 'done', 'underline': true, 'strike': true}
+        'attributes': {'todo': 'done', 'underline': true, 'strike': true},
       },
       {'insert': '\n'},
     ];
@@ -45,14 +49,20 @@ void main() {
 
   test('parseTodoSpans groups by the nearest heading above', () {
     final ops = [
-      {'insert': '无标题待办', 'attributes': {'todo': 'open'}},
+      {
+        'insert': '无标题待办',
+        'attributes': {'todo': 'open'},
+      },
       {'insert': '\n'},
       {'insert': '客户端'},
       {
         'insert': '\n',
-        'attributes': {'header': 2}
+        'attributes': {'header': 2},
       },
-      {'insert': '修崩溃', 'attributes': {'todo': 'open'}},
+      {
+        'insert': '修崩溃',
+        'attributes': {'todo': 'open'},
+      },
       {'insert': '\n'},
     ];
     final spans = parseTodoSpans(ops);
@@ -63,10 +73,13 @@ void main() {
 
   test('parseTodoSpans merges adjacent ops with the same state', () {
     final ops = [
-      {'insert': '前半', 'attributes': {'todo': 'open'}},
+      {
+        'insert': '前半',
+        'attributes': {'todo': 'open'},
+      },
       {
         'insert': '后半',
-        'attributes': {'todo': 'open', 'bold': true}
+        'attributes': {'todo': 'open', 'bold': true},
       },
       {'insert': '\n'},
     ];
@@ -79,8 +92,14 @@ void main() {
 
   test('parseTodoSpans splits spans when the done state changes', () {
     final ops = [
-      {'insert': '甲乙', 'attributes': {'todo': 'open'}},
-      {'insert': '丙', 'attributes': {'todo': 'done'}},
+      {
+        'insert': '甲乙',
+        'attributes': {'todo': 'open'},
+      },
+      {
+        'insert': '丙',
+        'attributes': {'todo': 'done'},
+      },
       {'insert': '\n'},
     ];
     final spans = parseTodoSpans(ops);
@@ -94,7 +113,10 @@ void main() {
     final ops = [
       {'insert': '前两字'},
       {'insert': '\n'},
-      {'insert': '目标', 'attributes': {'todo': 'open'}},
+      {
+        'insert': '目标',
+        'attributes': {'todo': 'open'},
+      },
       {'insert': '尾巴\n'},
     ];
     final spans = parseTodoSpans(ops);
@@ -220,12 +242,7 @@ void main() {
       'sticky_panel_data_v2': jsonEncode({
         'selectedIndex': 0,
         'projects': [
-          {
-            'id': 'p1',
-            'name': '项目A',
-            'docJson': document,
-            'colorValue': 0,
-          },
+          {'id': 'p1', 'name': '项目A', 'docJson': document, 'colorValue': 0},
         ],
       }),
     });
@@ -240,8 +257,9 @@ void main() {
     return store;
   }
 
-  testWidgets('todo header and group title use readable typography',
-      (tester) async {
+  testWidgets('todo header and group title use readable typography', (
+    tester,
+  ) async {
     await pumpTodoApp(tester);
 
     Text textWidget(String value) => tester
@@ -269,8 +287,27 @@ void main() {
     expect(tester.getSize(panel).height, 40);
   });
 
-  testWidgets('todo header buttons fill the row and use danger hover styling',
-      (tester) async {
+  testWidgets('todo panel expands and collapses back to its previous height', (
+    tester,
+  ) async {
+    await pumpTodoApp(tester);
+    final panel = find.byKey(const ValueKey('todo-panel'));
+
+    expect(tester.getSize(panel).height, 180);
+    await tester.tap(find.byTooltip('待办区占满面板'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).height, greaterThan(180));
+    expect(find.byTooltip('收起待办区'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('收起待办区'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).height, 180);
+    expect(find.byTooltip('待办区占满面板'), findsOneWidget);
+  });
+
+  testWidgets('todo header buttons fill the row and use danger hover styling', (
+    tester,
+  ) async {
     await pumpTodoApp(tester);
 
     IconButton button(String tooltip) => tester
@@ -280,25 +317,28 @@ void main() {
     final clear = button('清除已完成待办');
     final expand = button('待办区占满面板');
     final close = button('关闭');
+    final scheme = Theme.of(tester.element(find.byTooltip('关闭'))).colorScheme;
 
     expect(clear.style?.fixedSize?.resolve({}), const Size.square(40));
     expect(expand.style?.fixedSize?.resolve({}), const Size.square(40));
     expect(
       clear.style?.backgroundColor?.resolve({WidgetState.hovered}),
-      const Color(0xFFE81123),
+      scheme.error.withValues(alpha: 0.12),
     );
     expect(
       clear.style?.foregroundColor?.resolve({WidgetState.hovered}),
-      Colors.white,
+      scheme.error,
     );
     expect(
       close.style?.backgroundColor?.resolve({WidgetState.hovered}),
-      const Color(0xFFE81123),
+      scheme.error.withValues(alpha: 0.12),
     );
     expect(
       close.style?.foregroundColor?.resolve({WidgetState.hovered}),
-      Colors.white,
+      scheme.error,
     );
+    expect(clear.style?.animationDuration, const Duration(milliseconds: 140));
+    expect(close.style?.animationDuration, const Duration(milliseconds: 140));
   });
 
   testWidgets('todo header gives visual feedback on hover', (tester) async {
@@ -315,8 +355,9 @@ void main() {
     await mouse.removePointer();
   });
 
-  testWidgets('Windows editor context menu is localized and compact',
-      (tester) async {
+  testWidgets('Windows editor context menu is localized and compact', (
+    tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     late AppStore store;
     try {
@@ -341,8 +382,8 @@ void main() {
     );
     final menu = editor.config.contextMenuBuilder!(rawState.context, rawState);
     expect(menu, isA<TextFieldTapRegion>());
-    final toolbar = (menu as TextFieldTapRegion).child
-        as DesktopTextSelectionToolbar;
+    final toolbar =
+        (menu as TextFieldTapRegion).child as DesktopTextSelectionToolbar;
     final labels = <String>[];
     for (final child in toolbar.children) {
       final box = child as SizedBox;
@@ -353,8 +394,9 @@ void main() {
     expect(labels, containsAll(['剪切', '复制', '粘贴', '全选']));
   });
 
-  testWidgets('selection formatting uses font-size and color dropdowns',
-      (tester) async {
+  testWidgets('selection formatting uses font-size and color dropdowns', (
+    tester,
+  ) async {
     final store = await pumpTodoApp(tester);
     final controller = store.controllerFor(store.selected!);
     controller.updateSelection(
@@ -384,7 +426,10 @@ void main() {
     expect(find.text('红色'), findsOneWidget);
     await tester.tap(find.text('红色'));
     await tester.pumpAndSettle();
-    expect(controller.getSelectionStyle().attributes['color']?.value, '#FF3B30');
+    expect(
+      controller.getSelectionStyle().attributes['color']?.value,
+      '#FF3B30',
+    );
 
     await tester.tap(find.byKey(const ValueKey('background-color-combo')));
     await tester.pumpAndSettle();
@@ -398,8 +443,38 @@ void main() {
     );
   });
 
-  testWidgets('editor uses a stable Simplified Chinese glyph fallback',
-      (tester) async {
+  testWidgets('selection panel wraps its controls and follows selection drag', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    final controller = store.controllerFor(store.selected!);
+    controller.updateSelection(
+      const TextSelection(baseOffset: 0, extentOffset: 2),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+
+    final panel = find.byKey(const ValueKey('selection-format-panel'));
+    final listenerFinder = find.byKey(
+      const ValueKey('editor-pointer-listener-p1'),
+    );
+    expect(
+      tester.getSize(panel).width,
+      lessThan(tester.getSize(listenerFinder).width - 24),
+    );
+
+    final listener = tester.widget<Listener>(listenerFinder);
+    listener.onPointerUp!(const PointerUpEvent(position: Offset(100, 80)));
+    await tester.pump();
+
+    final localTop =
+        tester.getTopLeft(panel).dy - tester.getTopLeft(listenerFinder).dy;
+    expect(localTop, 90);
+  });
+
+  testWidgets('editor uses a stable Simplified Chinese glyph fallback', (
+    tester,
+  ) async {
     await pumpTodoApp(tester);
 
     final style = tester.widget<DefaultTextStyle>(
@@ -410,8 +485,9 @@ void main() {
     expect(style.style.fontFamilyFallback, contains('PingFang SC'));
   });
 
-  testWidgets('editor config keeps the reliable desktop paste path',
-      (tester) async {
+  testWidgets('editor config keeps the reliable desktop paste path', (
+    tester,
+  ) async {
     final store = await pumpTodoApp(tester);
     final controller = store.controllerFor(store.selected!);
     expect(
@@ -423,8 +499,9 @@ void main() {
     // Widget tests do not have a real Windows clipboard service. Verify the
     // accelerator wiring here; Quill owns the platform clipboard operation.
     final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
-    final hasPasteShortcut =
-        editor.config.customShortcuts!.entries.any((entry) {
+    final hasPasteShortcut = editor.config.customShortcuts!.entries.any((
+      entry,
+    ) {
       final activator = entry.key;
       return activator is SingleActivator &&
           activator.trigger == LogicalKeyboardKey.keyV &&
@@ -435,8 +512,9 @@ void main() {
     expect(hasPasteShortcut, isTrue);
   });
 
-  testWidgets('editing ordinary text keeps later todo row identities',
-      (tester) async {
+  testWidgets('editing ordinary text keeps later todo row identities', (
+    tester,
+  ) async {
     final document = jsonEncode([
       {
         'insert': '待办1',

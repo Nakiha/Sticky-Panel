@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,10 +40,7 @@ class StickyPanelApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         FlutterQuillLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('zh', 'CN'),
-        Locale('en', 'US'),
-      ],
+      supportedLocales: const [Locale('zh', 'CN'), Locale('en', 'US')],
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
@@ -112,6 +111,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
   /// it to multiple scroll views and throw on every tab switch.
   final _editorFocusNodes = <String, FocusNode>{};
   final _editorScrollControllers = <String, ScrollController>{};
+  final _selectionPanelAnchors = <String, ValueNotifier<Offset?>>{};
 
   AppStore get store => widget.store;
 
@@ -128,13 +128,27 @@ class _HomePageState extends State<HomePage> with WindowListener {
   ScrollController _scrollFor(Project project) =>
       _editorScrollControllers.putIfAbsent(project.id, ScrollController.new);
 
+  ValueNotifier<Offset?> _selectionAnchorFor(Project project) =>
+      _selectionPanelAnchors.putIfAbsent(
+        project.id,
+        () => ValueNotifier<Offset?>(null),
+      );
+
   void _pruneEditorAttachments() {
     final live = store.projects.map((p) => p.id).toSet();
-    for (final id in _editorFocusNodes.keys.where((id) => !live.contains(id)).toList()) {
+    for (final id
+        in _editorFocusNodes.keys.where((id) => !live.contains(id)).toList()) {
       _editorFocusNodes.remove(id)?.dispose();
     }
-    for (final id in _editorScrollControllers.keys.where((id) => !live.contains(id)).toList()) {
+    for (final id in _editorScrollControllers.keys
+        .where((id) => !live.contains(id))
+        .toList()) {
       _editorScrollControllers.remove(id)?.dispose();
+    }
+    for (final id in _selectionPanelAnchors.keys
+        .where((id) => !live.contains(id))
+        .toList()) {
+      _selectionPanelAnchors.remove(id)?.dispose();
     }
     _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
   }
@@ -148,6 +162,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
     }
     for (final controller in _editorScrollControllers.values) {
       controller.dispose();
+    }
+    for (final anchor in _selectionPanelAnchors.values) {
+      anchor.dispose();
     }
     super.dispose();
   }
@@ -166,29 +183,37 @@ class _HomePageState extends State<HomePage> with WindowListener {
   Future<void> _requestClose() async {
     if (_closeDialogOpen || !mounted) return;
     _closeDialogOpen = true;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('关闭 Sticky Panel', style: TextStyle(fontSize: 15)),
-        content: const Text('确定要关闭吗？所有内容都已自动保存。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('关闭', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) {
-      await windowManager.destroy();
-      return;
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('关闭 Sticky Panel', style: TextStyle(fontSize: 15)),
+          content: const Text('确定要关闭吗？所有内容都已自动保存。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('关闭', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+
+      // Destroying the native window from inside the guarded WM_CLOSE
+      // callback can block Windows' platform thread. Release the guard first,
+      // let the dialog route complete this frame, then request a normal close.
+      await windowManager.setPreventClose(false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(windowManager.close());
+      });
+    } finally {
+      _closeDialogOpen = false;
     }
-    _closeDialogOpen = false;
   }
 
   /// Jump from a todo back to its source span in the editor.
@@ -208,7 +233,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
       final controller = store.controllerFor(project);
       controller.updateSelection(
         TextSelection(
-            baseOffset: span.start, extentOffset: span.start + span.length),
+          baseOffset: span.start,
+          extentOffset: span.start + span.length,
+        ),
         ChangeSource.local,
       );
       // Best effort: nudge the selection into view once layout settles.
@@ -267,12 +294,14 @@ class _HomePageState extends State<HomePage> with WindowListener {
   }
 
   Widget _buildWorkspace(
-      BuildContext context, Project? project, double availableHeight) {
+    BuildContext context,
+    Project? project,
+    double availableHeight,
+  ) {
     final maxTodoHeight = availableHeight < _todoHeaderHeight
         ? _todoHeaderHeight
         : availableHeight;
-    final requestedHeight =
-        _todoExpanded ? maxTodoHeight : _todoPanelHeight;
+    final requestedHeight = _todoExpanded ? maxTodoHeight : _todoPanelHeight;
     final todoHeight =
         requestedHeight.clamp(_todoHeaderHeight, maxTodoHeight).toDouble();
 
@@ -343,12 +372,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ),
             if (!_isMac) ...[
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
-              _titleBarIcon(
-                Icons.close,
-                '关闭',
-                _requestClose,
-                danger: true,
-              ),
+              _titleBarIcon(Icons.close, '关闭', _requestClose, danger: true),
             ],
             const SizedBox(width: 4),
           ],
@@ -396,21 +420,20 @@ class _HomePageState extends State<HomePage> with WindowListener {
         fixedSize: const WidgetStatePropertyAll(Size(40, 36)),
         padding: const WidgetStatePropertyAll(EdgeInsets.zero),
         shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
+        animationDuration: const Duration(milliseconds: 140),
         foregroundColor: WidgetStateProperty.resolveWith((states) {
-          if (danger &&
-              (states.contains(WidgetState.hovered) ||
-                  states.contains(WidgetState.pressed))) {
-            return Colors.white;
+          if (danger && _isDangerButtonActive(states)) {
+            return scheme.error;
           }
           return active ? scheme.primary : scheme.onSurfaceVariant;
         }),
         backgroundColor: WidgetStateProperty.resolveWith((states) {
           if (!danger) return Colors.transparent;
           if (states.contains(WidgetState.pressed)) {
-            return const Color(0xFFC50F1F);
+            return scheme.error.withValues(alpha: 0.18);
           }
-          if (states.contains(WidgetState.hovered)) {
-            return const Color(0xFFE81123);
+          if (_isDangerButtonActive(states)) {
+            return scheme.error.withValues(alpha: 0.12);
           }
           return Colors.transparent;
         }),
@@ -419,6 +442,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
       onPressed: onPressed,
     );
   }
+
+  bool _isDangerButtonActive(Set<WidgetState> states) =>
+      states.contains(WidgetState.hovered) ||
+      states.contains(WidgetState.focused) ||
+      states.contains(WidgetState.pressed);
 
   void _showProjectMenu(BuildContext context, Project project) {
     showModalBottomSheet<void>(
@@ -448,8 +476,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ListTile(
               dense: true,
               leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: Text('删除「${project.name}」',
-                  style: const TextStyle(color: Colors.red)),
+              title: Text(
+                '删除「${project.name}」',
+                style: const TextStyle(color: Colors.red),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _confirmDeleteProject(context, project);
@@ -505,14 +535,21 @@ class _HomePageState extends State<HomePage> with WindowListener {
                         ),
                       ),
                       child: project.colorValue == value
-                          ? const Icon(Icons.check,
-                              size: 16, color: Colors.white)
+                          ? const Icon(
+                              Icons.check,
+                              size: 16,
+                              color: Colors.white,
+                            )
                           : null,
                     ),
                     const SizedBox(height: 4),
-                    Text(label,
-                        style: TextStyle(
-                            fontSize: 11, color: scheme.onSurfaceVariant)),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -522,7 +559,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
     );
   }
 
-  Future<void> _confirmDeleteProject(BuildContext context, Project project) async {
+  Future<void> _confirmDeleteProject(
+    BuildContext context,
+    Project project,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -548,8 +588,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(project == null ? '新建项目' : '重命名项目',
-            style: const TextStyle(fontSize: 15)),
+        title: Text(
+          project == null ? '新建项目' : '重命名项目',
+          style: const TextStyle(fontSize: 15),
+        ),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -633,26 +675,19 @@ class _HomePageState extends State<HomePage> with WindowListener {
               child: TextButton(
                 style: ButtonStyle(
                   alignment: Alignment.centerLeft,
-                  minimumSize:
-                      const WidgetStatePropertyAll(Size(0, 32)),
+                  minimumSize: const WidgetStatePropertyAll(Size(0, 32)),
                   padding: const WidgetStatePropertyAll(
                     EdgeInsets.symmetric(horizontal: 14),
                   ),
-                  shape: const WidgetStatePropertyAll(
-                    RoundedRectangleBorder(),
-                  ),
-                  foregroundColor:
-                      WidgetStatePropertyAll(scheme.onSurface),
+                  shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
+                  foregroundColor: WidgetStatePropertyAll(scheme.onSurface),
                   textStyle: const WidgetStatePropertyAll(
                     TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
                   ),
                 ),
                 onPressed: button.onPressed,
                 child: Text(
-                  AdaptiveTextSelectionToolbar.getButtonLabel(
-                    context,
-                    button,
-                  ),
+                  AdaptiveTextSelectionToolbar.getButtonLabel(context, button),
                 ),
               ),
             ),
@@ -687,52 +722,56 @@ class _HomePageState extends State<HomePage> with WindowListener {
                 : null,
             fontFamilyFallback: _editorFontFallbacks,
           ),
-          child: QuillEditor(
-            key: ValueKey(project.id),
-            controller: store.controllerFor(project),
-            focusNode: _focusFor(project),
-            scrollController: _scrollFor(project),
-            config: QuillEditorConfig(
-              placeholder: '随手记…',
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              expands: true,
-              contextMenuBuilder: _buildEditorContextMenu,
-              // Explicitly register the desktop paste accelerator. Quill also
-              // inherits Flutter's editing shortcuts, but this local mapping
-              // keeps Ctrl/Cmd+V working even when another Actions scope is
-              // introduced around the panel.
-              customShortcuts: {
-                SingleActivator(
-                  LogicalKeyboardKey.keyV,
-                  control: !_isMac,
-                  meta: _isMac,
-                ): const PasteTextIntent(SelectionChangedCause.keyboard),
-              },
-              // The todo underline is derived from the custom `todo`
-              // attribute instead of a stored underline attribute, so the
-              // visual marker can never leak into neighbouring text.
-              customStyleBuilder: (attribute) {
-                if (attribute.key != kTodoAttributeKey) {
-                  return const TextStyle();
-                }
-                final done = attribute.value == 'done';
-                return TextStyle(
-                  decoration: done
-                      ? TextDecoration.lineThrough
-                      : TextDecoration.underline,
-                  decorationColor: scheme.primary,
-                  color: done ? scheme.onSurfaceVariant : null,
-                );
-              },
+          child: Listener(
+            key: ValueKey('editor-pointer-listener-${project.id}'),
+            behavior: HitTestBehavior.translucent,
+            onPointerUp: (event) {
+              _selectionAnchorFor(project).value = event.localPosition;
+            },
+            child: QuillEditor(
+              key: ValueKey(project.id),
+              controller: store.controllerFor(project),
+              focusNode: _focusFor(project),
+              scrollController: _scrollFor(project),
+              config: QuillEditorConfig(
+                placeholder: '随手记…',
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                expands: true,
+                contextMenuBuilder: _buildEditorContextMenu,
+                // Explicitly register the desktop paste accelerator. Quill also
+                // inherits Flutter's editing shortcuts, but this local mapping
+                // keeps Ctrl/Cmd+V working even when another Actions scope is
+                // introduced around the panel.
+                customShortcuts: {
+                  SingleActivator(
+                    LogicalKeyboardKey.keyV,
+                    control: !_isMac,
+                    meta: _isMac,
+                  ): const PasteTextIntent(
+                    SelectionChangedCause.keyboard,
+                  ),
+                },
+                // The todo underline is derived from the custom `todo`
+                // attribute instead of a stored underline attribute, so the
+                // visual marker can never leak into neighbouring text.
+                customStyleBuilder: (attribute) {
+                  if (attribute.key != kTodoAttributeKey) {
+                    return const TextStyle();
+                  }
+                  final done = attribute.value == 'done';
+                  return TextStyle(
+                    decoration: done
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.underline,
+                    decorationColor: scheme.primary,
+                    color: done ? scheme.onSurfaceVariant : null,
+                  );
+                },
+              ),
             ),
           ),
         ),
-        Positioned(
-          left: 12,
-          right: 12,
-          bottom: 8,
-          child: _buildSelectionPanel(context, project),
-        ),
+        Positioned.fill(child: _buildSelectionPanel(context, project)),
       ],
     );
   }
@@ -754,6 +793,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
   Widget _buildSelectionPanel(BuildContext context, Project project) {
     final scheme = Theme.of(context).colorScheme;
     final controller = store.controllerFor(project);
+    final anchor = _selectionAnchorFor(project);
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -761,12 +801,22 @@ class _HomePageState extends State<HomePage> with WindowListener {
         final visible = selection.isValid && !selection.isCollapsed;
         final attrs = controller.getSelectionStyle().attributes;
 
-        Widget iconBtn(IconData icon, String tooltip, VoidCallback onPressed,
-            {bool active = false}) {
+        Widget iconBtn(
+          IconData icon,
+          String tooltip,
+          VoidCallback onPressed, {
+          bool active = false,
+        }) {
           return IconButton(
             icon: Icon(icon, size: 17),
             tooltip: tooltip,
-            visualDensity: VisualDensity.compact,
+            style: const ButtonStyle(
+              fixedSize: WidgetStatePropertyAll(Size.square(36)),
+              minimumSize: WidgetStatePropertyAll(Size.square(36)),
+              maximumSize: WidgetStatePropertyAll(Size.square(36)),
+              padding: WidgetStatePropertyAll(EdgeInsets.zero),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
             color: active ? scheme.primary : scheme.onSurfaceVariant,
             onPressed: onPressed,
           );
@@ -778,17 +828,19 @@ class _HomePageState extends State<HomePage> with WindowListener {
         final isTodo = attrs.containsKey(kTodoAttributeKey);
 
         final panel = Material(
+          key: const ValueKey('selection-format-panel'),
           color: scheme.surfaceContainerHighest,
-          elevation: 0,
+          elevation: 3,
           borderRadius: BorderRadius.circular(10),
           child: Container(
             height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: scheme.outlineVariant),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 iconBtn(Icons.format_bold, '加粗', () {
                   controller.formatSelection(Attribute.bold);
@@ -797,7 +849,8 @@ class _HomePageState extends State<HomePage> with WindowListener {
                 iconBtn(Icons.title, '标题', () {
                   final active = attrs['header'] != null;
                   controller.formatSelection(
-                      Attribute.clone(Attribute.header, active ? null : 2));
+                    Attribute.clone(Attribute.header, active ? null : 2),
+                  );
                   _focusFor(project).requestFocus();
                 }, active: attrs['header'] != null),
                 Tooltip(
@@ -824,8 +877,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     maxMenuWidth: 88,
                     itemHeight: 30,
                     buttonPadding: const EdgeInsets.only(left: 6, right: 2),
-                    itemPadding:
-                        const EdgeInsets.only(left: 10, right: 12),
+                    itemPadding: const EdgeInsets.only(left: 10, right: 12),
                     borderRadius: BorderRadius.circular(4),
                     backgroundColor: Colors.transparent,
                     foregroundColor: scheme.onSurfaceVariant,
@@ -855,8 +907,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     maxMenuWidth: 148,
                     itemHeight: 30,
                     buttonPadding: const EdgeInsets.only(left: 6, right: 2),
-                    itemPadding:
-                        const EdgeInsets.only(left: 10, right: 12),
+                    itemPadding: const EdgeInsets.only(left: 10, right: 12),
                     borderRadius: BorderRadius.circular(4),
                     backgroundColor: Colors.transparent,
                     foregroundColor: scheme.onSurfaceVariant,
@@ -909,8 +960,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     maxMenuWidth: 148,
                     itemHeight: 30,
                     buttonPadding: const EdgeInsets.only(left: 6, right: 2),
-                    itemPadding:
-                        const EdgeInsets.only(left: 10, right: 12),
+                    itemPadding: const EdgeInsets.only(left: 10, right: 12),
                     borderRadius: BorderRadius.circular(4),
                     backgroundColor: Colors.transparent,
                     foregroundColor: scheme.onSurfaceVariant,
@@ -964,12 +1014,18 @@ class _HomePageState extends State<HomePage> with WindowListener {
           ),
         );
 
-        return IgnorePointer(
-          ignoring: !visible,
-          child: AnimatedOpacity(
-            opacity: visible ? 1 : 0,
-            duration: const Duration(milliseconds: 120),
-            child: panel,
+        return ValueListenableBuilder<Offset?>(
+          valueListenable: anchor,
+          builder: (context, anchorPosition, _) => IgnorePointer(
+            ignoring: !visible,
+            child: CustomSingleChildLayout(
+              delegate: _SelectionPanelLayoutDelegate(anchor: anchorPosition),
+              child: AnimatedOpacity(
+                opacity: visible ? 1 : 0,
+                duration: const Duration(milliseconds: 120),
+                child: panel,
+              ),
+            ),
           ),
         );
       },
@@ -1015,8 +1071,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
       groups.putIfAbsent(span.section, () => []).add(span);
     }
     if (sw.elapsedMilliseconds > 5) {
-      debugPrint('[perf] todo parse: ${sw.elapsedMilliseconds}ms '
-          '(${ops.length} ops)');
+      debugPrint(
+        '[perf] todo parse: ${sw.elapsedMilliseconds}ms '
+        '(${ops.length} ops)',
+      );
     }
     return groups;
   }
@@ -1043,7 +1101,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
   }
 
   Future<void> _runTodoDismissal(
-      Set<_TodoTileIdentity> keys, VoidCallback updateDocument) async {
+    Set<_TodoTileIdentity> keys,
+    VoidCallback updateDocument,
+  ) async {
     if (keys.isEmpty) {
       updateDocument();
       return;
@@ -1057,7 +1117,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
   }
 
   Future<void> _unmarkTodoSpanAnimated(
-      Project project, int start, int length) async {
+    Project project,
+    int start,
+    int length,
+  ) async {
     final end = start + length;
     final affected = <_TodoTileIdentity>{
       for (final group in _todoGroupsFor(project).values)
@@ -1099,13 +1162,14 @@ class _HomePageState extends State<HomePage> with WindowListener {
   void _toggleTodoExpanded(double maxHeight) {
     setState(() {
       if (_todoExpanded) {
+        _todoPanelHeight = _todoHeightBeforeExpand
+            .clamp(_todoHeaderHeight, maxHeight)
+            .toDouble();
         _todoExpanded = false;
-        _todoPanelHeight = _todoHeightBeforeExpand.clamp(
-          _todoHeaderHeight,
-          maxHeight,
-        ).toDouble();
       } else {
-        _todoHeightBeforeExpand = _todoPanelHeight;
+        _todoHeightBeforeExpand =
+            _todoPanelHeight.clamp(_todoHeaderHeight, maxHeight).toDouble();
+        _todoPanelHeight = maxHeight;
         _todoExpanded = true;
       }
     });
@@ -1113,10 +1177,13 @@ class _HomePageState extends State<HomePage> with WindowListener {
 
   void _startTodoResize(double maxHeight) {
     setState(() {
-      if (!_todoExpanded) _todoHeightBeforeExpand = _todoPanelHeight;
-      _todoPanelHeight = (_todoExpanded ? maxHeight : _todoPanelHeight)
-          .clamp(_todoHeaderHeight, maxHeight)
-          .toDouble();
+      if (_todoExpanded) {
+        _todoPanelHeight = maxHeight;
+      } else {
+        _todoHeightBeforeExpand = _todoPanelHeight;
+        _todoPanelHeight =
+            _todoPanelHeight.clamp(_todoHeaderHeight, maxHeight).toDouble();
+      }
       _todoExpanded = false;
       _resizingTodoPanel = true;
     });
@@ -1160,14 +1227,17 @@ class _HomePageState extends State<HomePage> with WindowListener {
 
     final total = groups.fold<int>(0, (sum, g) => sum + g.todos.length);
     final remaining = groups.fold<int>(
-        0, (sum, g) => sum + g.todos.where((e) => !e.done).length);
+      0,
+      (sum, g) => sum + g.todos.where((e) => !e.done).length,
+    );
     final hasCompleted = groups.any((g) => g.todos.any((todo) => todo.done));
 
     final list = groups.isEmpty
         ? Center(
-            child: Text('在编辑板里划选一段文字，点浮动面板的 ☑ 列为待办',
-                style:
-                    TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+            child: Text(
+              '在编辑板里划选一段文字，点浮动面板的 ☑ 列为待办',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
           )
         : ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
@@ -1186,12 +1256,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   ),
                 ),
                 for (final entry in _keyedTodos(group.project, group.todos))
-                  _buildTodoTile(
-                    context,
-                    group.project,
-                    entry.todo,
-                    entry.key,
-                  ),
+                  _buildTodoTile(context, group.project, entry.todo, entry.key),
               ],
             ],
           );
@@ -1226,115 +1291,124 @@ class _HomePageState extends State<HomePage> with WindowListener {
   ) {
     final scheme = Theme.of(context).colorScheme;
     return MouseRegion(
-      cursor: SystemMouseCursors.resizeUpDown,
       onEnter: (_) => setState(() => _todoHeaderHovered = true),
       onExit: (_) => setState(() => _todoHeaderHovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onVerticalDragStart: (_) => _startTodoResize(maxHeight),
-        onVerticalDragUpdate: (details) =>
-            _updateTodoResize(details.delta.dy, maxHeight),
-        onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
-        onVerticalDragCancel: () => _endTodoResize(maxHeight),
-        child: AnimatedContainer(
-          key: const ValueKey('todo-header'),
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-          height: _todoHeaderHeight,
-          color: _todoHeaderHovered
-              ? scheme.primary.withValues(alpha: 0.055)
-              : Colors.transparent,
-          child: Row(
-            children: [
-              const SizedBox(width: 12),
-              Text('待办',
-                  style: TextStyle(
-                      fontSize: _todoTextSize,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface)),
-              const SizedBox(width: 6),
-              AnimatedSwitcher(
+      child: AnimatedContainer(
+        key: const ValueKey('todo-header'),
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        height: _todoHeaderHeight,
+        color: _todoHeaderHovered
+            ? scheme.primary.withValues(alpha: 0.055)
+            : Colors.transparent,
+        child: Row(
+          children: [
+            Expanded(
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeUpDown,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onVerticalDragStart: (_) => _startTodoResize(maxHeight),
+                  onVerticalDragUpdate: (details) =>
+                      _updateTodoResize(details.delta.dy, maxHeight),
+                  onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
+                  onVerticalDragCancel: () => _endTodoResize(maxHeight),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      Text(
+                        '待办',
+                        style: TextStyle(
+                          fontSize: _todoTextSize,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      AnimatedSwitcher(
+                        duration: _todoMotion,
+                        transitionBuilder: (child, animation) =>
+                            FadeTransition(opacity: animation, child: child),
+                        child: Text(
+                          '剩余 $remaining / 共 $total',
+                          key: ValueKey('$remaining:$total'),
+                          style: TextStyle(
+                            fontSize: _todoTextSize,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      if (store.projects.length > 1) ...[
+                        const SizedBox(width: 10),
+                        _buildScopeToggle(context),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: '清除已完成待办',
+              style: ButtonStyle(
+                fixedSize: const WidgetStatePropertyAll(Size.square(40)),
+                padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+                shape: const WidgetStatePropertyAll(
+                  RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(4)),
+                  ),
+                ),
+                animationDuration: const Duration(milliseconds: 140),
+                foregroundColor: WidgetStateProperty.resolveWith((states) {
+                  if (states.contains(WidgetState.disabled)) {
+                    return scheme.onSurfaceVariant.withValues(alpha: 0.35);
+                  }
+                  if (_isDangerButtonActive(states)) return scheme.error;
+                  return scheme.onSurfaceVariant;
+                }),
+                backgroundColor: WidgetStateProperty.resolveWith((states) {
+                  if (states.contains(WidgetState.disabled)) {
+                    return Colors.transparent;
+                  }
+                  if (states.contains(WidgetState.pressed)) {
+                    return scheme.error.withValues(alpha: 0.18);
+                  }
+                  if (_isDangerButtonActive(states)) {
+                    return scheme.error.withValues(alpha: 0.12);
+                  }
+                  return Colors.transparent;
+                }),
+                overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+              ),
+              icon: AnimatedRotation(
+                turns: _clearingDone ? 1 : 0,
+                duration: _panelMotion,
+                curve: Curves.easeOutCubic,
+                child: const Icon(Icons.done_all, size: 17),
+              ),
+              onPressed: hasCompleted && !_clearingDone
+                  ? () => _clearCompleted(groups)
+                  : null,
+            ),
+            IconButton(
+              tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
+              style: const ButtonStyle(
+                fixedSize: WidgetStatePropertyAll(Size.square(40)),
+                padding: WidgetStatePropertyAll(EdgeInsets.zero),
+              ),
+              icon: AnimatedSwitcher(
                 duration: _todoMotion,
                 transitionBuilder: (child, animation) =>
-                    FadeTransition(opacity: animation, child: child),
-                child: Text(
-                  '剩余 $remaining / 共 $total',
-                  key: ValueKey('$remaining:$total'),
-                  style: TextStyle(
-                      fontSize: _todoTextSize,
-                      color: scheme.onSurfaceVariant),
+                    ScaleTransition(scale: animation, child: child),
+                child: Icon(
+                  _todoExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
+                  key: ValueKey(_todoExpanded),
+                  size: 18,
+                  color: scheme.onSurfaceVariant,
                 ),
               ),
-              if (store.projects.length > 1) ...[
-                const SizedBox(width: 10),
-                _buildScopeToggle(context),
-              ],
-              const Spacer(),
-              IconButton(
-                tooltip: '清除已完成待办',
-                style: ButtonStyle(
-                  fixedSize:
-                      const WidgetStatePropertyAll(Size.square(40)),
-                  padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-                  shape: const WidgetStatePropertyAll(
-                    RoundedRectangleBorder(),
-                  ),
-                  foregroundColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return scheme.onSurfaceVariant.withValues(alpha: 0.35);
-                    }
-                    if (states.contains(WidgetState.hovered) ||
-                        states.contains(WidgetState.pressed)) {
-                      return Colors.white;
-                    }
-                    return scheme.onSurfaceVariant;
-                  }),
-                  backgroundColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return Colors.transparent;
-                    }
-                    if (states.contains(WidgetState.pressed)) {
-                      return const Color(0xFFC50F1F);
-                    }
-                    if (states.contains(WidgetState.hovered)) {
-                      return const Color(0xFFE81123);
-                    }
-                    return Colors.transparent;
-                  }),
-                  overlayColor:
-                      const WidgetStatePropertyAll(Colors.transparent),
-                ),
-                icon: AnimatedRotation(
-                  turns: _clearingDone ? 1 : 0,
-                  duration: _panelMotion,
-                  curve: Curves.easeOutCubic,
-                  child: const Icon(Icons.done_all, size: 17),
-                ),
-                onPressed: hasCompleted && !_clearingDone
-                    ? () => _clearCompleted(groups)
-                    : null,
-              ),
-              IconButton(
-                tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
-                style: const ButtonStyle(
-                  fixedSize: WidgetStatePropertyAll(Size.square(40)),
-                  padding: WidgetStatePropertyAll(EdgeInsets.zero),
-                ),
-                icon: AnimatedSwitcher(
-                  duration: _todoMotion,
-                  transitionBuilder: (child, animation) =>
-                      ScaleTransition(scale: animation, child: child),
-                  child: Icon(
-                    _todoExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
-                    key: ValueKey(_todoExpanded),
-                    size: 18,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                onPressed: () => _toggleTodoExpanded(maxHeight),
-              ),
-            ],
-          ),
+              onPressed: () => _toggleTodoExpanded(maxHeight),
+            ),
+          ],
         ),
       ),
     );
@@ -1356,10 +1430,13 @@ class _HomePageState extends State<HomePage> with WindowListener {
             color: active ? scheme.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
           ),
-          child: Text(label,
-              style: TextStyle(
-                  fontSize: 11,
-                  color: active ? Colors.white : scheme.onSurfaceVariant)),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: active ? Colors.white : scheme.onSurfaceVariant,
+            ),
+          ),
         ),
       );
     }
@@ -1373,10 +1450,12 @@ class _HomePageState extends State<HomePage> with WindowListener {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          pill('本项目', !_todoShowAll,
-              () => setState(() => _todoShowAll = false)),
-          pill('全部', _todoShowAll,
-              () => setState(() => _todoShowAll = true)),
+          pill(
+            '本项目',
+            !_todoShowAll,
+            () => setState(() => _todoShowAll = false),
+          ),
+          pill('全部', _todoShowAll, () => setState(() => _todoShowAll = true)),
         ],
       ),
     );
@@ -1391,9 +1470,8 @@ class _HomePageState extends State<HomePage> with WindowListener {
     final scheme = Theme.of(context).colorScheme;
     // In the all-projects view each todo's checkbox follows its own
     // project's theme color; the default blue applies when unset.
-    final accent = project.colorValue == 0
-        ? scheme.primary
-        : Color(project.colorValue);
+    final accent =
+        project.colorValue == 0 ? scheme.primary : Color(project.colorValue);
     final dismissing = _dismissingTodos.contains(animationKey);
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1418,8 +1496,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
             child: GestureDetector(
               onTap: () => _revealSpan(project, todo),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
                 ),
@@ -1428,11 +1505,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   curve: Curves.easeOut,
                   style: TextStyle(
                     fontSize: _todoTextSize,
-                    decoration:
-                        todo.done ? TextDecoration.lineThrough : null,
-                    color: todo.done
-                        ? scheme.onSurfaceVariant
-                        : scheme.onSurface,
+                    decoration: todo.done ? TextDecoration.lineThrough : null,
+                    color:
+                        todo.done ? scheme.onSurfaceVariant : scheme.onSurface,
                   ),
                   child: Text(todo.text),
                 ),
@@ -1470,6 +1545,68 @@ class _HomePageState extends State<HomePage> with WindowListener {
   }
 }
 
+class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
+  const _SelectionPanelLayoutDelegate({required this.anchor});
+
+  static const double _margin = 8;
+  static const double _gap = 10;
+
+  final Offset? anchor;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    return BoxConstraints(
+      maxWidth: (constraints.maxWidth - _margin * 2)
+          .clamp(0, double.infinity)
+          .toDouble(),
+      maxHeight: (constraints.maxHeight - _margin * 2)
+          .clamp(0, double.infinity)
+          .toDouble(),
+    );
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final target = anchor;
+    if (target == null) {
+      return Offset(
+        ((size.width - childSize.width) / 2)
+            .clamp(
+              _margin,
+              (size.width - childSize.width - _margin).clamp(
+                _margin,
+                double.infinity,
+              ),
+            )
+            .toDouble(),
+        (size.height - childSize.height - _margin)
+            .clamp(_margin, double.infinity)
+            .toDouble(),
+      );
+    }
+
+    final maxLeft = (size.width - childSize.width - _margin).clamp(
+      _margin,
+      double.infinity,
+    );
+    final left =
+        (target.dx - childSize.width / 2).clamp(_margin, maxLeft).toDouble();
+    var top = target.dy + _gap;
+    if (top + childSize.height > size.height - _margin) {
+      top = target.dy - childSize.height - _gap;
+    }
+    final maxTop = (size.height - childSize.height - _margin).clamp(
+      _margin,
+      double.infinity,
+    );
+    return Offset(left, top.clamp(_margin, maxTop).toDouble());
+  }
+
+  @override
+  bool shouldRelayout(_SelectionPanelLayoutDelegate oldDelegate) =>
+      anchor != oldDelegate.anchor;
+}
+
 class _SelectionColorOption extends StatelessWidget {
   const _SelectionColorOption({
     required this.value,
@@ -1494,11 +1631,7 @@ class _SelectionColorOption extends StatelessWidget {
               ? Icon(Icons.check, size: 16, color: scheme.primary)
               : null,
         ),
-        _SelectionColorSwatch(
-          value: value,
-          color: color,
-          selected: selected,
-        ),
+        _SelectionColorSwatch(value: value, color: color, selected: selected),
         const SizedBox(width: 10),
         Text(
           label,
@@ -1653,8 +1786,9 @@ class _ProjectTabState extends State<_ProjectTab> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: background,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(8)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(8),
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
