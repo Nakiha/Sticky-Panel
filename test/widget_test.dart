@@ -393,7 +393,10 @@ void main() {
     store.addProject('项目2');
     await tester.pumpAndSettle();
 
-    final pin = find.byTooltip('取消置顶');
+    final pinButton = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '取消置顶');
+    final pin = find.byWidget(pinButton);
     final firstTab = find.byKey(const ValueKey('project-tab-p1'));
     final lastTab = find.byKey(
       ValueKey('project-tab-${store.projects.last.id}'),
@@ -406,7 +409,10 @@ void main() {
       of: lastTab,
       matching: find.byType(AnimatedContainer),
     );
-    final add = find.byTooltip('新建项目');
+    final addButton = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '新建项目');
+    final add = find.byWidget(addButton);
     final minimize = find.byTooltip('最小化');
 
     final pinRect = tester.getRect(pin);
@@ -483,14 +489,17 @@ void main() {
 
   testWidgets('top bar controls touch both window edges', (tester) async {
     await pumpTodoApp(tester);
-    final tab = find.byKey(const ValueKey('project-tab-p1'));
+    final pinButton = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '取消置顶');
     final closeButton = tester
         .widgetList<IconButton>(find.byType(IconButton))
         .singleWhere((button) => button.tooltip == '关闭');
+    final pin = find.byWidget(pinButton);
     final close = find.byWidget(closeButton);
     final scaffold = find.byType(Scaffold);
 
-    expect(tester.getTopLeft(tab).dx, tester.getTopLeft(scaffold).dx);
+    expect(tester.getTopLeft(pin).dx, tester.getTopLeft(scaffold).dx);
     expect(tester.getBottomRight(close).dx, tester.getBottomRight(scaffold).dx);
   });
 
