@@ -316,6 +316,8 @@ void main() {
 
   testWidgets('Windows editor context menu is localized and compact',
       (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final store = await pumpTodoApp(tester);
     final project = store.selected!;
     store.controllerFor(project).updateSelection(
@@ -415,16 +417,16 @@ void main() {
     // Widget tests do not have a real Windows clipboard service. Verify the
     // accelerator wiring here; Quill owns the platform clipboard operation.
     final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
-    final pasteIntent = editor.config.customShortcuts![
-      const SingleActivator(
-        LogicalKeyboardKey.keyV,
-        control: true,
-      )
-    ];
-    expect(
-      pasteIntent,
-      isA<PasteTextIntent>(),
-    );
+    final hasPasteShortcut =
+        editor.config.customShortcuts!.entries.any((entry) {
+      final activator = entry.key;
+      return activator is SingleActivator &&
+          activator.trigger == LogicalKeyboardKey.keyV &&
+          activator.control &&
+          !activator.meta &&
+          entry.value is PasteTextIntent;
+    });
+    expect(hasPasteShortcut, isTrue);
   });
 
   testWidgets('editing ordinary text keeps later todo row identities',
