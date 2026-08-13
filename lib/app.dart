@@ -7,6 +7,8 @@ import 'models.dart';
 import 'store.dart';
 import 'todos.dart';
 
+typedef _TodoGroup = ({String label, Project project, List<TodoSpan> todos});
+
 class StickyPanelApp extends StatelessWidget {
   const StickyPanelApp({super.key, required this.store});
 
@@ -60,12 +62,23 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WindowListener {
   static final bool _isMac = defaultTargetPlatform == TargetPlatform.macOS;
+  static const double _todoHeaderHeight = 40;
+  static const double _defaultTodoPanelHeight = 180;
+  static const double _todoTextSize = 14;
+  static const Duration _panelMotion = Duration(milliseconds: 240);
+  static const Duration _todoMotion = Duration(milliseconds: 180);
 
   bool _alwaysOnTop = true;
   bool _todoExpanded = false;
   bool _todoShowAll = false;
+  bool _resizingTodoPanel = false;
+  bool _closeDialogOpen = false;
+  bool _clearingDone = false;
+  double _todoPanelHeight = _defaultTodoPanelHeight;
+  double _todoHeightBeforeExpand = _defaultTodoPanelHeight;
+  final Set<String> _dismissingTodos = {};
 
   /// One focus node / scroll controller per project: all editors stay alive
   /// in an IndexedStack, so sharing a single ScrollController would attach
@@ -79,6 +92,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     store.addListener(_pruneEditorAttachments);
+    windowManager.addListener(this);
   }
 
   FocusNode _focusFor(Project project) =>
@@ -101,6 +115,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     store.removeListener(_pruneEditorAttachments);
+    windowManager.removeListener(this);
     for (final node in _editorFocusNodes.values) {
       node.dispose();
     }
@@ -116,10 +131,48 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
+  @override
+  void onWindowClose() {
+    _requestClose();
+  }
+
+  Future<void> _requestClose() async {
+    if (_closeDialogOpen || !mounted) return;
+    _closeDialogOpen = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('关闭 Sticky Panel', style: TextStyle(fontSize: 15)),
+        content: const Text('确定要关闭吗？所有内容都已自动保存。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('关闭', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await windowManager.destroy();
+      return;
+    }
+    _closeDialogOpen = false;
+  }
+
   /// Jump from a todo back to its source span in the editor.
   void _revealSpan(Project project, TodoSpan span) {
     final projectIndex = store.projects.indexOf(project);
-    setState(() => _todoExpanded = false);
+    setState(() {
+      if (_todoExpanded) {
+        _todoExpanded = false;
+        _todoPanelHeight = _todoHeightBeforeExpand;
+      }
+    });
     if (projectIndex >= 0 && projectIndex != store.selectedIndex) {
       store.selectProject(projectIndex);
     }
@@ -164,22 +217,15 @@ class _HomePageState extends State<HomePage> {
               body: Column(
                 children: [
                   _buildTopBar(context),
-                  if (!_todoExpanded && project != null) ...[
-                    // Keep every project's editor alive so switching tabs
-                    // doesn't rebuild a whole QuillEditor (that was the
-                    // visible stutter when switching).
-                    Expanded(
-                      child: IndexedStack(
-                        index: store.selectedIndex,
-                        children: [
-                          for (final p in store.projects)
-                            _editorFor(context, p),
-                        ],
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => _buildWorkspace(
+                        context,
+                        project,
+                        constraints.maxHeight,
                       ),
                     ),
-                    const Divider(height: 1),
-                  ],
-                  _buildTodoSection(context),
+                  ),
                 ],
               ),
             ),
@@ -191,6 +237,40 @@ class _HomePageState extends State<HomePage> {
       debugPrint('[perf] page build: ${perfWatch.elapsedMilliseconds}ms');
     }
     return built;
+  }
+
+  Widget _buildWorkspace(
+      BuildContext context, Project? project, double availableHeight) {
+    final maxTodoHeight = availableHeight < _todoHeaderHeight
+        ? _todoHeaderHeight
+        : availableHeight;
+    final requestedHeight =
+        _todoExpanded ? maxTodoHeight : _todoPanelHeight;
+    final todoHeight =
+        requestedHeight.clamp(_todoHeaderHeight, maxTodoHeight).toDouble();
+
+    return Column(
+      children: [
+        if (project != null)
+          Expanded(
+            child: IndexedStack(
+              index: store.selectedIndex,
+              children: [
+                for (final p in store.projects) _editorFor(context, p),
+              ],
+            ),
+          )
+        else
+          const Spacer(),
+        AnimatedContainer(
+          key: const ValueKey('todo-panel'),
+          duration: _resizingTodoPanel ? Duration.zero : _panelMotion,
+          curve: Curves.easeInOutCubic,
+          height: todoHeight,
+          child: _buildTodoSection(context, maxTodoHeight),
+        ),
+      ],
+    );
   }
 
   // ------------------------------------------------------------------ top bar
@@ -236,7 +316,7 @@ class _HomePageState extends State<HomePage> {
             ),
             if (!_isMac) ...[
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
-              _titleBarIcon(Icons.close, '关闭', windowManager.close),
+              _titleBarIcon(Icons.close, '关闭', _requestClose),
             ],
             const SizedBox(width: 4),
           ],
@@ -610,7 +690,7 @@ class _HomePageState extends State<HomePage> {
                           final start = selection.start;
                           final length = selection.end - selection.start;
                           if (isTodo) {
-                            store.unmarkTodoSpan(project, start, length);
+                            _unmarkTodoSpanAnimated(project, start, length);
                           } else {
                             store.markTodoSpan(project, start, length);
                           }
@@ -653,12 +733,109 @@ class _HomePageState extends State<HomePage> {
     return groups;
   }
 
-  Widget _buildTodoSection(BuildContext context) {
+  String _todoAnimationKey(Project project, TodoSpan todo) =>
+      '${project.id}:${todo.start}:${todo.length}:${todo.text}';
+
+  Future<void> _runTodoDismissal(
+      Set<String> keys, VoidCallback updateDocument) async {
+    if (keys.isEmpty) {
+      updateDocument();
+      return;
+    }
+    setState(() => _dismissingTodos.addAll(keys));
+    await Future<void>.delayed(_todoMotion);
+    updateDocument();
+    if (mounted) {
+      setState(() => _dismissingTodos.removeAll(keys));
+    }
+  }
+
+  Future<void> _unmarkTodoSpanAnimated(
+      Project project, int start, int length) async {
+    final end = start + length;
+    final affected = <String>{
+      for (final group in _todoGroupsFor(project).values)
+        for (final todo in group)
+          if (todo.start < end && todo.start + todo.length > start)
+            _todoAnimationKey(project, todo),
+    };
+    await _runTodoDismissal(
+      affected,
+      () => store.unmarkTodoSpan(project, start, length),
+    );
+    if (mounted) _focusFor(project).requestFocus();
+  }
+
+  Future<void> _clearCompleted(List<_TodoGroup> groups) async {
+    if (_clearingDone) return;
+    final completedKeys = <String>{
+      for (final group in groups)
+        for (final todo in group.todos)
+          if (todo.done) _todoAnimationKey(group.project, todo),
+    };
+    if (completedKeys.isEmpty) return;
+
+    setState(() => _clearingDone = true);
+    await _runTodoDismissal(completedKeys, () {
+      if (_todoShowAll) {
+        for (final project in store.projects) {
+          store.clearDone(project);
+        }
+      } else {
+        final project = store.selected;
+        if (project != null) store.clearDone(project);
+      }
+    });
+    if (mounted) setState(() => _clearingDone = false);
+  }
+
+  void _toggleTodoExpanded(double maxHeight) {
+    setState(() {
+      if (_todoExpanded) {
+        _todoExpanded = false;
+        _todoPanelHeight = _todoHeightBeforeExpand.clamp(
+          _todoHeaderHeight,
+          maxHeight,
+        ).toDouble();
+      } else {
+        _todoHeightBeforeExpand = _todoPanelHeight;
+        _todoExpanded = true;
+      }
+    });
+  }
+
+  void _startTodoResize(double maxHeight) {
+    setState(() {
+      if (!_todoExpanded) _todoHeightBeforeExpand = _todoPanelHeight;
+      _todoPanelHeight = (_todoExpanded ? maxHeight : _todoPanelHeight)
+          .clamp(_todoHeaderHeight, maxHeight)
+          .toDouble();
+      _todoExpanded = false;
+      _resizingTodoPanel = true;
+    });
+  }
+
+  void _updateTodoResize(double deltaY, double maxHeight) {
+    setState(() {
+      _todoPanelHeight = (_todoPanelHeight - deltaY)
+          .clamp(_todoHeaderHeight, maxHeight)
+          .toDouble();
+    });
+  }
+
+  void _endTodoResize(double maxHeight) {
+    setState(() {
+      _resizingTodoPanel = false;
+      _todoExpanded = _todoPanelHeight >= maxHeight - 0.5;
+    });
+  }
+
+  Widget _buildTodoSection(BuildContext context, double maxHeight) {
     final scheme = Theme.of(context).colorScheme;
     final project = store.selected;
 
     // Groups of (header label, project, todos) depending on the scope.
-    final groups = <({String label, Project project, List<TodoSpan> todos})>[];
+    final groups = <_TodoGroup>[];
     if (_todoShowAll) {
       for (final p in store.projects) {
         final todos = [
@@ -677,6 +854,7 @@ class _HomePageState extends State<HomePage> {
     final total = groups.fold<int>(0, (sum, g) => sum + g.todos.length);
     final remaining = groups.fold<int>(
         0, (sum, g) => sum + g.todos.where((e) => !e.done).length);
+    final hasCompleted = groups.any((g) => g.todos.any((todo) => todo.done));
 
     final list = groups.isEmpty
         ? Center(
@@ -693,8 +871,8 @@ class _HomePageState extends State<HomePage> {
                   child: Text(
                     group.label,
                     style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
+                      fontSize: _todoTextSize,
+                      fontWeight: FontWeight.w700,
                       letterSpacing: 0.3,
                       color: scheme.onSurfaceVariant,
                     ),
@@ -706,75 +884,115 @@ class _HomePageState extends State<HomePage> {
             ],
           );
 
-    final content = Column(
-      children: [
-        _buildTodoHeader(context, remaining, total),
-        Expanded(child: list),
-      ],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      ),
+      child: Column(
+        children: [
+          _buildTodoHeader(
+            context,
+            remaining,
+            total,
+            groups,
+            hasCompleted,
+            maxHeight,
+          ),
+          Expanded(child: list),
+        ],
+      ),
     );
-
-    return _todoExpanded
-        ? Expanded(
-            child: Container(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
-              child: content,
-            ),
-          )
-        : Container(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
-            height: 180,
-            child: content,
-          );
   }
 
-  Widget _buildTodoHeader(BuildContext context, int remaining, int total) {
+  Widget _buildTodoHeader(
+    BuildContext context,
+    int remaining,
+    int total,
+    List<_TodoGroup> groups,
+    bool hasCompleted,
+    double maxHeight,
+  ) {
     final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 36,
-      child: Row(
-        children: [
-          const SizedBox(width: 12),
-          Text('待办',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: scheme.onSurface)),
-          const SizedBox(width: 6),
-          Text('剩余 $remaining / 共 $total',
-              style:
-                  TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
-          if (store.projects.length > 1) ...[
-            const SizedBox(width: 10),
-            _buildScopeToggle(context),
-          ],
-          const Spacer(),
-          IconButton(
-            tooltip: '清除已完成待办',
-            icon: Icon(Icons.done_all,
-                size: 17, color: scheme.onSurfaceVariant),
-            visualDensity: VisualDensity.compact,
-            onPressed: () {
-              if (_todoShowAll) {
-                for (final p in store.projects) {
-                  store.clearDone(p);
-                }
-              } else {
-                final project = store.selected;
-                if (project != null) store.clearDone(project);
-              }
-            },
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeUpDown,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onVerticalDragStart: (_) => _startTodoResize(maxHeight),
+        onVerticalDragUpdate: (details) =>
+            _updateTodoResize(details.delta.dy, maxHeight),
+        onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
+        onVerticalDragCancel: () => _endTodoResize(maxHeight),
+        child: SizedBox(
+          key: const ValueKey('todo-header'),
+          height: _todoHeaderHeight,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Text('待办',
+                  style: TextStyle(
+                      fontSize: _todoTextSize,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface)),
+              const SizedBox(width: 6),
+              AnimatedSwitcher(
+                duration: _todoMotion,
+                transitionBuilder: (child, animation) =>
+                    FadeTransition(opacity: animation, child: child),
+                child: Text(
+                  '剩余 $remaining / 共 $total',
+                  key: ValueKey('$remaining:$total'),
+                  style: TextStyle(
+                      fontSize: _todoTextSize,
+                      color: scheme.onSurfaceVariant),
+                ),
+              ),
+              if (store.projects.length > 1) ...[
+                const SizedBox(width: 10),
+                _buildScopeToggle(context),
+              ],
+              const Spacer(),
+              IconButton(
+                tooltip: '清除已完成待办',
+                icon: AnimatedRotation(
+                  turns: _clearingDone ? 1 : 0,
+                  duration: _panelMotion,
+                  curve: Curves.easeOutCubic,
+                  child: Icon(Icons.done_all,
+                      size: 17,
+                      color: hasCompleted
+                          ? scheme.onSurfaceVariant
+                          : scheme.onSurfaceVariant.withValues(alpha: 0.35)),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 32, height: 32),
+                onPressed: hasCompleted && !_clearingDone
+                    ? () => _clearCompleted(groups)
+                    : null,
+              ),
+              IconButton(
+                tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
+                icon: AnimatedSwitcher(
+                  duration: _todoMotion,
+                  transitionBuilder: (child, animation) =>
+                      ScaleTransition(scale: animation, child: child),
+                  child: Icon(
+                    _todoExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
+                    key: ValueKey(_todoExpanded),
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 32, height: 32),
+                onPressed: () => _toggleTodoExpanded(maxHeight),
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
-            icon: Icon(
-              _todoExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
-              size: 18,
-              color: scheme.onSurfaceVariant,
-            ),
-            onPressed: () =>
-                setState(() => _todoExpanded = !_todoExpanded),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -784,7 +1002,9 @@ class _HomePageState extends State<HomePage> {
     Widget pill(String label, bool active, VoidCallback onTap) {
       return GestureDetector(
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: _todoMotion,
+          curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
             color: active ? scheme.primary : Colors.transparent,
@@ -823,16 +1043,24 @@ class _HomePageState extends State<HomePage> {
     final accent = project.colorValue == 0
         ? scheme.primary
         : Color(project.colorValue);
-    return Padding(
+    final animationKey = _todoAnimationKey(project, todo);
+    final dismissing = _dismissingTodos.contains(animationKey);
+    final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
         children: [
           GestureDetector(
             onTap: () => store.toggleSpanDone(project, todo),
-            child: Icon(
-              todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
-              size: 17,
-              color: todo.done ? scheme.onSurfaceVariant : accent,
+            child: AnimatedSwitcher(
+              duration: _todoMotion,
+              transitionBuilder: (child, animation) =>
+                  ScaleTransition(scale: animation, child: child),
+              child: Icon(
+                todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
+                key: ValueKey(todo.done),
+                size: 17,
+                color: todo.done ? scheme.onSurfaceVariant : accent,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -845,21 +1073,48 @@ class _HomePageState extends State<HomePage> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text(
-                  todo.text,
+                child: AnimatedDefaultTextStyle(
+                  duration: _todoMotion,
+                  curve: Curves.easeOut,
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: _todoTextSize,
                     decoration:
                         todo.done ? TextDecoration.lineThrough : null,
                     color: todo.done
                         ? scheme.onSurfaceVariant
                         : scheme.onSurface,
                   ),
+                  child: Text(todo.text),
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(animationKey),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: _todoMotion,
+      curve: Curves.easeOut,
+      child: AnimatedAlign(
+        alignment: Alignment.topCenter,
+        heightFactor: dismissing ? 0 : 1,
+        duration: _todoMotion,
+        curve: Curves.easeInOut,
+        child: AnimatedOpacity(
+          opacity: dismissing ? 0 : 1,
+          duration: _todoMotion,
+          child: tile,
+        ),
+      ),
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 4 * (1 - value)),
+          child: child,
+        ),
       ),
     );
   }

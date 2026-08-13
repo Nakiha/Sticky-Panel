@@ -18,6 +18,7 @@ Future<void> main() async {
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAlwaysOnTop(true);
+    await windowManager.setPreventClose(true);
     await windowManager.show();
     await windowManager.focus();
   });

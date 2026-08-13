@@ -1,7 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sticky_panel/app.dart';
 import 'package:sticky_panel/models.dart';
+import 'package:sticky_panel/store.dart';
 import 'package:sticky_panel/todos.dart';
 
 void main() {
@@ -92,5 +96,183 @@ void main() {
     final spans = parseTodoSpans(ops);
     expect(spans.single.start, 4);
     expect(spans.single.length, 2);
+  });
+
+  test('typing inside a todo keeps it as one todo', () {
+    SharedPreferences.setMockInitialValues({});
+    const text = '今天很热要买冰淇淋';
+    final project = Project(
+      id: 'p1',
+      name: '项目A',
+      docJson: jsonEncode([
+        {
+          'insert': text,
+          'attributes': {'todo': 'open'},
+        },
+        {'insert': '\n'},
+      ]),
+    );
+    final store = AppStore()..projects.add(project);
+    addTearDown(store.dispose);
+    final controller = store.controllerFor(project);
+    final insertAt = '今天很热'.length;
+
+    controller.replaceText(
+      insertAt,
+      0,
+      ' ',
+      TextSelection.collapsed(offset: insertAt + 1),
+    );
+
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    expect(spans, hasLength(1));
+    expect(spans.single.text, '今天很热 要买冰淇淋');
+    expect(spans.single.done, isFalse);
+  });
+
+  test('replacing text inside a completed todo preserves its state', () {
+    SharedPreferences.setMockInitialValues({});
+    final project = Project(
+      id: 'p1',
+      name: '项目A',
+      docJson: jsonEncode([
+        {
+          'insert': '今天很热要买冰淇淋',
+          'attributes': {'todo': 'done'},
+        },
+        {'insert': '\n'},
+      ]),
+    );
+    final store = AppStore()..projects.add(project);
+    addTearDown(store.dispose);
+    final controller = store.controllerFor(project);
+
+    controller.replaceText(
+      2,
+      2,
+      '真的',
+      const TextSelection.collapsed(offset: 4),
+    );
+
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    expect(spans, hasLength(1));
+    expect(spans.single.done, isTrue);
+  });
+
+  test('separately marked todos are not merged across plain text', () {
+    SharedPreferences.setMockInitialValues({});
+    const first = '今天很热';
+    final project = Project(
+      id: 'p1',
+      name: '项目A',
+      docJson: jsonEncode([
+        {
+          'insert': first,
+          'attributes': {'todo': 'open'},
+        },
+        {'insert': ' '},
+        {
+          'insert': '要买冰淇淋',
+          'attributes': {'todo': 'open'},
+        },
+        {'insert': '\n'},
+      ]),
+    );
+    final store = AppStore()..projects.add(project);
+    addTearDown(store.dispose);
+    final controller = store.controllerFor(project);
+
+    controller.replaceText(
+      first.length,
+      0,
+      '-',
+      TextSelection.collapsed(offset: first.length + 1),
+    );
+
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    expect(spans, hasLength(2));
+    expect(spans[0].text, first);
+    expect(spans[1].text, '要买冰淇淋');
+  });
+
+  Future<AppStore> pumpTodoApp(WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = jsonEncode([
+      {'insert': '阶段一'},
+      {
+        'insert': '\n',
+        'attributes': {'header': 2},
+      },
+      {
+        'insert': '修复问题',
+        'attributes': {'todo': 'open'},
+      },
+      {'insert': '\n'},
+    ]);
+    SharedPreferences.setMockInitialValues({
+      'sticky_panel_data_v2': jsonEncode({
+        'selectedIndex': 0,
+        'projects': [
+          {
+            'id': 'p1',
+            'name': '项目A',
+            'docJson': document,
+            'colorValue': 0,
+          },
+        ],
+      }),
+    });
+    final store = AppStore();
+    await store.load();
+    await tester.pumpWidget(StickyPanelApp(store: store));
+    await tester.pump();
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      store.dispose();
+    });
+    return store;
+  }
+
+  testWidgets('todo header and group title use readable typography',
+      (tester) async {
+    await pumpTodoApp(tester);
+
+    Text textWidget(String value) => tester
+        .widgetList<Text>(find.byType(Text))
+        .firstWhere((widget) => widget.data == value);
+
+    expect(textWidget('待办').style?.fontSize, 14);
+    expect(textWidget('剩余 1 / 共 1').style?.fontSize, 14);
+    expect(textWidget('阶段一').style?.fontSize, 14);
+    expect(textWidget('阶段一').style?.fontWeight, FontWeight.w700);
+  });
+
+  testWidgets('todo header drag resizes and clamps the panel', (tester) async {
+    await pumpTodoApp(tester);
+    final panel = find.byKey(const ValueKey('todo-panel'));
+    final header = find.byKey(const ValueKey('todo-header'));
+
+    expect(tester.getSize(panel).height, 180);
+    await tester.drag(header, const Offset(0, -90));
+    await tester.pump();
+    expect(tester.getSize(panel).height, greaterThan(180));
+
+    await tester.drag(header, const Offset(0, 1000));
+    await tester.pump();
+    expect(tester.getSize(panel).height, 40);
+  });
+
+  testWidgets('close button asks for confirmation', (tester) async {
+    await pumpTodoApp(tester);
+
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭 Sticky Panel'), findsOneWidget);
+    expect(find.text('确定要关闭吗？所有内容都已自动保存。'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭 Sticky Panel'), findsNothing);
   });
 }

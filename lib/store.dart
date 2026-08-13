@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 import 'todos.dart';
 
+typedef _PendingTodoFormat = ({int index, int length, String state});
+
 /// Central state holder: projects, selection, quill controllers, persistence.
 class AppStore extends ChangeNotifier {
   static const _storageKey = 'sticky_panel_data_v2';
@@ -42,9 +44,69 @@ class AppStore extends ChangeNotifier {
         document: document,
         selection: const TextSelection.collapsed(offset: 0),
       );
-      controller.addListener(() => _onDocumentChanged(project, controller));
+      _PendingTodoFormat? pendingTodoFormat;
+      controller.onReplaceText = (index, len, data) {
+        pendingTodoFormat =
+            _todoFormatForReplacement(controller.document, index, len, data);
+        return true;
+      };
+      controller.addListener(() {
+        final pending = pendingTodoFormat;
+        pendingTodoFormat = null;
+        if (pending != null) {
+          controller.formatText(
+            pending.index,
+            pending.length,
+            todoAttribute(pending.state),
+            shouldNotifyListeners: false,
+          );
+        }
+        _onDocumentChanged(project, controller);
+      });
       return controller;
     });
+  }
+
+  /// Quill's built-in insertion rules do not know about our custom `todo`
+  /// inline attribute. Text typed in the middle of a todo would therefore be
+  /// inserted without that attribute and split one logical todo into two.
+  ///
+  /// Inherit the state only when the replacement is unambiguously inside one
+  /// todo. Requiring matching attributes on both sides of a collapsed cursor
+  /// deliberately avoids merging two independently marked todos.
+  static _PendingTodoFormat? _todoFormatForReplacement(
+    Document document,
+    int index,
+    int len,
+    Object? data,
+  ) {
+    if (data is! String || data.isEmpty || data.contains('\n')) return null;
+
+    String? todoState;
+    if (len > 0) {
+      if (index < 0 || index + len > document.length) return null;
+      final replacedText = document.getPlainText(index, len);
+      if (replacedText.contains('\n')) return null;
+      todoState = _todoStateFromStyle(document.collectStyle(index, len));
+    } else {
+      final left = _todoStateAt(document, index - 1);
+      final right = _todoStateAt(document, index);
+      if (left != null && left == right) todoState = left;
+    }
+
+    if (todoState == null) return null;
+    return (index: index, length: data.length, state: todoState);
+  }
+
+  static String? _todoStateAt(Document document, int offset) {
+    if (offset < 0 || offset >= document.length) return null;
+    if (document.getPlainText(offset, 1) == '\n') return null;
+    return _todoStateFromStyle(document.collectStyle(offset, 1));
+  }
+
+  static String? _todoStateFromStyle(Style style) {
+    final value = style.attributes[kTodoAttributeKey]?.value;
+    return value == 'open' || value == 'done' ? value as String : null;
   }
 
   /// Inline attributes must never sit on a newline character: Quill carries
