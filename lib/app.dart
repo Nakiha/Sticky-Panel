@@ -1596,49 +1596,45 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         child: Row(
           children: [
             Expanded(
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeUpDown,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onVerticalDragStart: (_) => _startTodoResize(maxHeight),
-                  onVerticalDragUpdate: (details) =>
-                      _updateTodoResize(details.delta.dy, maxHeight),
-                  onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
-                  onVerticalDragCancel: () => _endTodoResize(maxHeight),
-                  child: Row(
-                    children: [
-                      const SizedBox(width: 12),
-                      Text(
-                        '待办',
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onVerticalDragStart: (_) => _startTodoResize(maxHeight),
+                onVerticalDragUpdate: (details) =>
+                    _updateTodoResize(details.delta.dy, maxHeight),
+                onVerticalDragEnd: (_) => _endTodoResize(maxHeight),
+                onVerticalDragCancel: () => _endTodoResize(maxHeight),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 12),
+                    Text(
+                      '待办',
+                      style: TextStyle(
+                        fontSize: _todoTextSize,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    AnimatedSwitcher(
+                      duration: _todoMotion,
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(opacity: animation, child: child),
+                      child: Text(
+                        '剩余 $remaining / 共 $total',
+                        key: ValueKey('$remaining:$total'),
                         style: TextStyle(
                           fontSize: _todoTextSize,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface,
+                          color: scheme.onSurfaceVariant,
                         ),
                       ),
-                      const SizedBox(width: 6),
-                      AnimatedSwitcher(
-                        duration: _todoMotion,
-                        transitionBuilder: (child, animation) =>
-                            FadeTransition(opacity: animation, child: child),
-                        child: Text(
-                          '剩余 $remaining / 共 $total',
-                          key: ValueKey('$remaining:$total'),
-                          style: TextStyle(
-                            fontSize: _todoTextSize,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      if (store.projects.length > 1) ...[
-                        const SizedBox(width: 10),
-                        _buildScopeToggle(context),
-                      ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
+            // Pinned to the right so it doesn't shift when the count
+            // text changes width.
+            if (store.projects.length > 1) _buildScopeToggle(context),
             IconButton(
               tooltip: '清除已完成待办',
               style: _panelIconButtonStyle(
