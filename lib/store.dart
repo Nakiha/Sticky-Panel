@@ -320,7 +320,7 @@ class AppStore extends ChangeNotifier {
   }
 
   /// Save without notifying listeners.
-  void persist() => _save();
+  Future<void> persist() => _save();
 
   Future<void> setClosePreference(ClosePreference value) async {
     closePreference = value;

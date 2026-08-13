@@ -801,5 +801,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('关闭窗口时要怎么处理？'), findsNothing);
     expect(windowCalls, contains('hide'));
+
+    await store.setClosePreference(ClosePreference.ask);
+    windowCalls.clear();
+    trayCalls.clear();
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('退出应用'));
+    await tester.pumpAndSettle();
+    expect(windowCalls, containsAllInOrder(['setPreventClose', 'destroy']));
+    expect(windowCalls, isNot(contains('close')));
+    expect(trayCalls.map((call) => call.method), contains('destroy'));
   });
 }

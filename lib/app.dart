@@ -238,17 +238,39 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   Future<void> _exitApplication() async {
     if (_exitRequested) return;
     _exitRequested = true;
+    // Flush the latest editor state before tearing down the engine. The
+    // regular edit listener persists asynchronously, so an immediate native
+    // quit must not race the final SharedPreferences write.
+    try {
+      await store.persist();
+    } catch (error) {
+      // A persistence failure must not leave an invisible process behind.
+      debugPrint('Failed to persist state before exit: $error');
+    }
     if (_trayReady) {
       try {
         await trayManager.destroy();
+        _trayReady = false;
       } catch (error) {
         debugPrint('Failed to destroy system tray: $error');
       }
     }
-    await windowManager.setPreventClose(false);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(windowManager.close());
-    });
+    // window_manager's Windows destroy() posts WM_QUIT directly. Unlike the
+    // old post-frame close, it works while the window is hidden and does not
+    // re-enter onWindowClose after the user has already confirmed exiting.
+    try {
+      await windowManager.setPreventClose(false);
+    } catch (error) {
+      debugPrint('Failed to release close interception: $error');
+    }
+    try {
+      await windowManager.destroy();
+    } catch (error) {
+      // close() is still a useful fallback here because it is dispatched
+      // immediately instead of waiting for a Flutter frame.
+      debugPrint('Failed to destroy native window: $error');
+      await windowManager.close();
+    }
   }
 
   @override
