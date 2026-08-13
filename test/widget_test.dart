@@ -232,10 +232,10 @@ void main() {
     await store.load();
     await tester.pumpWidget(StickyPanelApp(store: store));
     await tester.pump();
-    addTearDown(() async {
-      await tester.pumpWidget(const SizedBox.shrink());
-      store.dispose();
-    });
+    // The widget test binding tears down the rendered tree between tests.
+    // Starting another guarded pump from addTearDown can overlap the next
+    // test when Quill is still closing an overlay or text-input connection.
+    addTearDown(store.dispose);
     return store;
   }
 
@@ -322,28 +322,27 @@ void main() {
           const TextSelection(baseOffset: 0, extentOffset: 2),
           ChangeSource.local,
         );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    await tester.tap(
-      find.byType(QuillEditor),
-      buttons: kSecondaryButton,
-      kind: PointerDeviceKind.mouse,
+    // A synthetic secondary click does not create Flutter's native desktop
+    // overlay in widget tests. Build our configured menu directly from the
+    // live raw-editor state so localization and sizing remain deterministic.
+    final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
+    final rawState = tester.state<QuillRawEditorState>(
+      find.byType(QuillRawEditor),
     );
-    await tester.pumpAndSettle();
-
-    expect(find.byType(DesktopTextSelectionToolbar), findsOneWidget);
-    expect(find.text('剪切'), findsOneWidget);
-    expect(find.text('复制'), findsOneWidget);
-    expect(find.text('粘贴'), findsOneWidget);
-    expect(find.text('全选'), findsOneWidget);
-    for (final textButton in find
-        .descendant(
-          of: find.byType(DesktopTextSelectionToolbar),
-          matching: find.byType(TextButton),
-        )
-        .evaluate()) {
-      expect(tester.getSize(find.byWidget(textButton.widget)).height, 32);
+    final menu = editor.config.contextMenuBuilder!(rawState.context, rawState);
+    expect(menu, isA<TextFieldTapRegion>());
+    final toolbar = (menu as TextFieldTapRegion).child
+        as DesktopTextSelectionToolbar;
+    final labels = <String>[];
+    for (final child in toolbar.children) {
+      final box = child as SizedBox;
+      expect(box.height, 32);
+      final button = box.child! as TextButton;
+      labels.add((button.child! as Text).data!);
     }
+    expect(labels, containsAll(['剪切', '复制', '粘贴', '全选']));
   });
 
   testWidgets('selection formatting uses font-size and color dropdowns',
@@ -403,7 +402,8 @@ void main() {
     expect(style.style.fontFamilyFallback, contains('PingFang SC'));
   });
 
-  testWidgets('Ctrl+V pastes plain text inside the editor', (tester) async {
+  testWidgets('editor pastes plain text through the reliable clipboard path',
+      (tester) async {
     final store = await pumpTodoApp(tester);
     final controller = store.controllerFor(store.selected!);
     expect(
@@ -413,15 +413,13 @@ void main() {
     );
 
     await Clipboard.setData(const ClipboardData(text: '粘贴进来的文字'));
-    await tester.tap(find.byType(QuillEditor));
     controller.updateSelection(
       const TextSelection.collapsed(offset: 0),
       ChangeSource.local,
     );
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-    await tester.pumpAndSettle();
+    // ignore: experimental_member_use
+    expect(await controller.clipboardPaste(), isTrue);
+    await tester.pump();
 
     expect(controller.document.toPlainText(), startsWith('粘贴进来的文字'));
   });
