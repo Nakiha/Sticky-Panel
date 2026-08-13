@@ -25,6 +25,20 @@ void main() {
     expect(restored.docJson, project.docJson);
   });
 
+  test('remembered close preference survives a store reload', () async {
+    SharedPreferences.setMockInitialValues({});
+    final first = AppStore();
+    await first.load();
+    await first.setClosePreference(ClosePreference.hideToTray);
+
+    final second = AppStore();
+    await second.load();
+    expect(second.closePreference, ClosePreference.hideToTray);
+
+    first.dispose();
+    second.dispose();
+  });
+
   test('parseTodoSpans finds open and done spans', () {
     final ops = [
       {'insert': '随便记点东西\n'},
@@ -224,8 +238,10 @@ void main() {
   Future<AppStore> pumpTodoApp(
     WidgetTester tester, {
     String? documentJson,
+    bool enableSystemTray = false,
   }) async {
-    final document = documentJson ??
+    final document =
+        documentJson ??
         jsonEncode([
           {'insert': '阶段一'},
           {
@@ -248,7 +264,9 @@ void main() {
     });
     final store = AppStore();
     await store.load();
-    await tester.pumpWidget(StickyPanelApp(store: store));
+    await tester.pumpWidget(
+      StickyPanelApp(store: store, enableSystemTray: enableSystemTray),
+    );
     await tester.pump();
     // The widget test binding tears down the rendered tree between tests.
     // Starting another guarded pump from addTearDown can overlap the next
@@ -316,11 +334,28 @@ void main() {
 
     final clear = button('清除已完成待办');
     final expand = button('待办区占满面板');
+    final add = button('新建项目');
+    final pin = button('取消置顶');
+    final minimize = button('最小化');
     final close = button('关闭');
     final scheme = Theme.of(tester.element(find.byTooltip('关闭'))).colorScheme;
 
     expect(clear.style?.fixedSize?.resolve({}), const Size.square(40));
     expect(expand.style?.fixedSize?.resolve({}), const Size.square(40));
+    for (final iconButton in [clear, expand, add, pin, minimize, close]) {
+      final shape = iconButton.style?.shape?.resolve({});
+      expect(shape, isA<RoundedRectangleBorder>());
+      expect(
+        (shape! as RoundedRectangleBorder).borderRadius,
+        const BorderRadius.all(Radius.circular(4)),
+      );
+    }
+    for (final iconButton in [expand, add, pin, minimize]) {
+      expect(
+        iconButton.style?.backgroundColor?.resolve({WidgetState.hovered}),
+        scheme.onSurface.withValues(alpha: 0.07),
+      );
+    }
     expect(
       clear.style?.backgroundColor?.resolve({WidgetState.hovered}),
       scheme.error.withValues(alpha: 0.12),
@@ -351,8 +386,52 @@ void main() {
 
     final container = tester.widget<AnimatedContainer>(header);
     final decoration = container.decoration! as BoxDecoration;
-    expect(decoration.color, isNot(Colors.transparent));
+    final scheme = Theme.of(tester.element(header)).colorScheme;
+    expect(decoration.color, scheme.onSurface.withValues(alpha: 0.06));
     await mouse.removePointer();
+  });
+
+  testWidgets('default project blue is stable after choosing another accent', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    store.setProjectColor(store.selected!, 0xFFFF3B30);
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const ValueKey('project-tab-p1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('主题色'));
+    await tester.pumpAndSettle();
+
+    final defaultSwatch = tester.widget<Container>(
+      find.byKey(const ValueKey('project-color-0')),
+    );
+    final decoration = defaultSwatch.decoration! as BoxDecoration;
+    expect(decoration.color, const Color(0xFF007AFF));
+  });
+
+  testWidgets('top bar controls touch both window edges', (tester) async {
+    await pumpTodoApp(tester);
+    final tab = find.byKey(const ValueKey('project-tab-p1'));
+    final closeButton = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '关闭');
+    final close = find.byWidget(closeButton);
+    final scaffold = find.byType(Scaffold);
+
+    expect(tester.getTopLeft(tab).dx, tester.getTopLeft(scaffold).dx);
+    expect(tester.getBottomRight(close).dx, tester.getBottomRight(scaffold).dx);
+  });
+
+  testWidgets('todo list keeps compact spacing below its header', (
+    tester,
+  ) async {
+    await pumpTodoApp(tester);
+    final panel = find.byKey(const ValueKey('todo-panel'));
+    final list = tester.widget<ListView>(
+      find.descendant(of: panel, matching: find.byType(ListView)),
+    );
+    expect(list.padding, const EdgeInsets.fromLTRB(12, 0, 12, 8));
   });
 
   testWidgets('Windows editor context menu is localized and compact', (
@@ -367,7 +446,9 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
     final project = store.selected!;
-    store.controllerFor(project).updateSelection(
+    store
+        .controllerFor(project)
+        .updateSelection(
           const TextSelection(baseOffset: 0, extentOffset: 2),
           ChangeSource.local,
         );
@@ -537,9 +618,9 @@ void main() {
     final panel = find.byKey(const ValueKey('todo-panel'));
 
     Finder todoTile(String text) => find.ancestor(
-          of: find.descendant(of: panel, matching: find.text(text)),
-          matching: find.byType(TweenAnimationBuilder<double>),
-        );
+      of: find.descendant(of: panel, matching: find.text(text)),
+      matching: find.byType(TweenAnimationBuilder<double>),
+    );
 
     final secondElement = todoTile('待办2').evaluate().single;
     final thirdElement = todoTile('待办3').evaluate().single;
@@ -568,5 +649,61 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(find.text('关闭 Sticky Panel'), findsNothing);
+  });
+
+  testWidgets('Windows tray close offers and remembers hide or exit', (
+    tester,
+  ) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final trayCalls = <String>[];
+    final windowCalls = <String>[];
+    messenger.setMockMethodCallHandler(const MethodChannel('tray_manager'), (
+      call,
+    ) async {
+      trayCalls.add(call.method);
+      return null;
+    });
+    messenger.setMockMethodCallHandler(const MethodChannel('window_manager'), (
+      call,
+    ) async {
+      windowCalls.add(call.method);
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('tray_manager'),
+        null,
+      );
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('window_manager'),
+        null,
+      );
+    });
+
+    final store = await pumpTodoApp(tester, enableSystemTray: true);
+    await tester.pumpAndSettle();
+    expect(trayCalls, containsAll(['setIcon', 'setToolTip', 'setContextMenu']));
+
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭窗口时要怎么处理？'), findsOneWidget);
+    expect(find.text('隐藏到系统托盘'), findsOneWidget);
+    expect(find.text('退出应用'), findsOneWidget);
+    expect(find.text('记住选择，下次不再提示'), findsOneWidget);
+
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
+    await tester.tap(find.text('隐藏到系统托盘'));
+    await tester.pumpAndSettle();
+    expect(windowCalls, contains('hide'));
+    expect(windowCalls, isNot(contains('close')));
+    expect(store.closePreference, ClosePreference.hideToTray);
+
+    windowCalls.clear();
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭窗口时要怎么处理？'), findsNothing);
+    expect(windowCalls, contains('hide'));
   });
 }

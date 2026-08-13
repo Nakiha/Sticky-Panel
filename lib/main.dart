@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -25,5 +27,5 @@ Future<void> main() async {
 
   final store = AppStore();
   await store.load();
-  runApp(StickyPanelApp(store: store));
+  runApp(StickyPanelApp(store: store, enableSystemTray: Platform.isWindows));
 }

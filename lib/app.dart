@@ -1,16 +1,20 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide MenuItem;
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart';
+import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'models.dart';
 import 'store.dart';
 import 'todos.dart';
 import 'widgets/app_menu_combo.dart';
+
+const _defaultProjectBlue = Color(0xFF007AFF);
+const _defaultProjectBlueDark = Color(0xFF0A84FF);
 
 typedef _TodoGroup = ({String label, Project project, List<TodoSpan> todos});
 typedef _TodoTileIdentity = ({
@@ -21,15 +25,20 @@ typedef _TodoTileIdentity = ({
 });
 typedef _KeyedTodo = ({TodoSpan todo, _TodoTileIdentity key});
 
+enum _CloseChoice { hideToTray, exitApplication }
+
 class StickyPanelApp extends StatelessWidget {
-  const StickyPanelApp({super.key, required this.store});
+  const StickyPanelApp({
+    super.key,
+    required this.store,
+    this.enableSystemTray = false,
+  });
 
   final AppStore store;
+  final bool enableSystemTray;
 
   @override
   Widget build(BuildContext context) {
-    const blue = Color(0xFF007AFF);
-    const blueDark = Color(0xFF0A84FF);
     return MaterialApp(
       title: 'Sticky Panel',
       debugShowCheckedModeBanner: false,
@@ -45,7 +54,7 @@ class StickyPanelApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
         colorScheme: const ColorScheme.light(
-          primary: blue,
+          primary: _defaultProjectBlue,
           surface: Colors.white,
           onSurface: Color(0xFF1C1C1E),
           onSurfaceVariant: Color(0xFF8E8E93),
@@ -57,7 +66,7 @@ class StickyPanelApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFF1C1C1E),
         colorScheme: const ColorScheme.dark(
-          primary: blueDark,
+          primary: _defaultProjectBlueDark,
           surface: Color(0xFF1C1C1E),
           onSurface: Color(0xFFF2F2F7),
           onSurfaceVariant: Color(0xFF8E8E93),
@@ -65,21 +74,30 @@ class StickyPanelApp extends StatelessWidget {
           surfaceContainerHighest: Color(0xFF2C2C2E),
         ),
       ),
-      home: HomePage(store: store),
+      home: HomePage(store: store, enableSystemTray: enableSystemTray),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.store});
+  const HomePage({
+    super.key,
+    required this.store,
+    required this.enableSystemTray,
+  });
 
   final AppStore store;
+  final bool enableSystemTray;
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with WindowListener {
+class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
+  static const _trayIconAsset = 'windows/runner/resources/app_icon.ico';
+  static const _trayShowKey = 'show_window';
+  static const _trayResetCloseKey = 'reset_close_preference';
+  static const _trayExitKey = 'exit_app';
   static final bool _isMac = defaultTargetPlatform == TargetPlatform.macOS;
   static const double _todoHeaderHeight = 40;
   static const double _defaultTodoPanelHeight = 180;
@@ -101,6 +119,8 @@ class _HomePageState extends State<HomePage> with WindowListener {
   bool _todoHeaderHovered = false;
   bool _resizingTodoPanel = false;
   bool _closeDialogOpen = false;
+  bool _trayReady = false;
+  bool _exitRequested = false;
   bool _clearingDone = false;
   double _todoPanelHeight = _defaultTodoPanelHeight;
   double _todoHeightBeforeExpand = _defaultTodoPanelHeight;
@@ -120,6 +140,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
     super.initState();
     store.addListener(_pruneEditorAttachments);
     windowManager.addListener(this);
+    if (widget.enableSystemTray) {
+      trayManager.addListener(this);
+      unawaited(_initSystemTray());
+    }
   }
 
   FocusNode _focusFor(Project project) =>
@@ -140,14 +164,16 @@ class _HomePageState extends State<HomePage> with WindowListener {
         in _editorFocusNodes.keys.where((id) => !live.contains(id)).toList()) {
       _editorFocusNodes.remove(id)?.dispose();
     }
-    for (final id in _editorScrollControllers.keys
-        .where((id) => !live.contains(id))
-        .toList()) {
+    for (final id
+        in _editorScrollControllers.keys
+            .where((id) => !live.contains(id))
+            .toList()) {
       _editorScrollControllers.remove(id)?.dispose();
     }
-    for (final id in _selectionPanelAnchors.keys
-        .where((id) => !live.contains(id))
-        .toList()) {
+    for (final id
+        in _selectionPanelAnchors.keys
+            .where((id) => !live.contains(id))
+            .toList()) {
       _selectionPanelAnchors.remove(id)?.dispose();
     }
     _editorCache.removeWhere((key, _) => !live.contains(key.split('|').first));
@@ -157,6 +183,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
   void dispose() {
     store.removeListener(_pruneEditorAttachments);
     windowManager.removeListener(this);
+    if (widget.enableSystemTray) {
+      trayManager.removeListener(this);
+    }
     for (final node in _editorFocusNodes.values) {
       node.dispose();
     }
@@ -175,6 +204,77 @@ class _HomePageState extends State<HomePage> with WindowListener {
     setState(() {});
   }
 
+  Future<void> _initSystemTray() async {
+    try {
+      await trayManager.setIcon(_trayIconAsset);
+      await trayManager.setToolTip('Sticky Panel');
+      await trayManager.setContextMenu(
+        Menu(
+          items: [
+            MenuItem(key: _trayShowKey, label: '显示 Sticky Panel'),
+            MenuItem.separator(),
+            MenuItem(key: _trayResetCloseKey, label: '恢复关闭时询问'),
+            MenuItem.separator(),
+            MenuItem(key: _trayExitKey, label: '彻底退出'),
+          ],
+        ),
+      );
+      _trayReady = true;
+    } catch (error, stackTrace) {
+      debugPrint('Failed to initialize system tray: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
+  Future<void> _showWindowFromTray() async {
+    await windowManager.show();
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
+    await windowManager.focus();
+  }
+
+  Future<void> _exitApplication() async {
+    if (_exitRequested) return;
+    _exitRequested = true;
+    if (_trayReady) {
+      try {
+        await trayManager.destroy();
+      } catch (error) {
+        debugPrint('Failed to destroy system tray: $error');
+      }
+    }
+    await windowManager.setPreventClose(false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(windowManager.close());
+    });
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    unawaited(_showWindowFromTray());
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    unawaited(trayManager.popUpContextMenu());
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    switch (menuItem.key) {
+      case _trayShowKey:
+        unawaited(_showWindowFromTray());
+        return;
+      case _trayResetCloseKey:
+        unawaited(store.setClosePreference(ClosePreference.ask));
+        return;
+      case _trayExitKey:
+        unawaited(_exitApplication());
+        return;
+    }
+  }
+
   @override
   void onWindowClose() {
     _requestClose();
@@ -184,6 +284,85 @@ class _HomePageState extends State<HomePage> with WindowListener {
     if (_closeDialogOpen || !mounted) return;
     _closeDialogOpen = true;
     try {
+      final canUseTray = widget.enableSystemTray && _trayReady;
+      if (canUseTray) {
+        switch (store.closePreference) {
+          case ClosePreference.hideToTray:
+            await windowManager.hide();
+            return;
+          case ClosePreference.exitApplication:
+            await _exitApplication();
+            return;
+          case ClosePreference.ask:
+            break;
+        }
+
+        var rememberChoice = false;
+        final choice = await showDialog<_CloseChoice>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+              title: const Text(
+                '关闭 Sticky Panel',
+                style: TextStyle(fontSize: 15),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('关闭窗口时要怎么处理？'),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    value: rememberChoice,
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text(
+                      '记住选择，下次不再提示',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() => rememberChoice = value ?? false);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _CloseChoice.hideToTray),
+                  child: const Text('隐藏到系统托盘'),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _CloseChoice.exitApplication),
+                  child: const Text(
+                    '退出应用',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+        if (choice == null) return;
+
+        if (rememberChoice) {
+          await store.setClosePreference(
+            choice == _CloseChoice.hideToTray
+                ? ClosePreference.hideToTray
+                : ClosePreference.exitApplication,
+          );
+        }
+        if (choice == _CloseChoice.hideToTray) {
+          await windowManager.hide();
+        } else {
+          await _exitApplication();
+        }
+        return;
+      }
+
       final confirmed = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
@@ -203,14 +382,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
         ),
       );
       if (confirmed != true) return;
-
-      // Destroying the native window from inside the guarded WM_CLOSE
-      // callback can block Windows' platform thread. Release the guard first,
-      // let the dialog route complete this frame, then request a normal close.
-      await windowManager.setPreventClose(false);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(windowManager.close());
-      });
+      await _exitApplication();
     } finally {
       _closeDialogOpen = false;
     }
@@ -302,8 +474,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
         ? _todoHeaderHeight
         : availableHeight;
     final requestedHeight = _todoExpanded ? maxTodoHeight : _todoPanelHeight;
-    final todoHeight =
-        requestedHeight.clamp(_todoHeaderHeight, maxTodoHeight).toDouble();
+    final todoHeight = requestedHeight
+        .clamp(_todoHeaderHeight, maxTodoHeight)
+        .toDouble();
 
     return Column(
       children: [
@@ -349,7 +522,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // macOS keeps its native traffic lights with a hidden title bar.
-            if (_isMac) const SizedBox(width: 72) else const SizedBox(width: 8),
+            if (_isMac) const SizedBox(width: 72),
             Expanded(
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
@@ -359,10 +532,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     _buildTab(context, store.projects[index], index),
               ),
             ),
-            IconButton(
-              tooltip: '新建项目',
-              icon: Icon(Icons.add, size: 17, color: scheme.onSurfaceVariant),
-              onPressed: () => _editProjectName(context, null),
+            _titleBarIcon(
+              Icons.add,
+              '新建项目',
+              () => _editProjectName(context, null),
             ),
             _titleBarIcon(
               _alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
@@ -374,7 +547,6 @@ class _HomePageState extends State<HomePage> with WindowListener {
               _titleBarIcon(Icons.minimize, '最小化', windowManager.minimize),
               _titleBarIcon(Icons.close, '关闭', _requestClose, danger: true),
             ],
-            const SizedBox(width: 4),
           ],
         ),
       ),
@@ -384,9 +556,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
   Widget _buildTab(BuildContext context, Project project, int index) {
     final scheme = Theme.of(context).colorScheme;
     final selected = index == store.selectedIndex;
-    final projectColor =
-        project.colorValue == 0 ? null : Color(project.colorValue);
+    final projectColor = project.colorValue == 0
+        ? null
+        : Color(project.colorValue);
     return _ProjectTab(
+      key: ValueKey('project-tab-${project.id}'),
       selected: selected,
       projectColor: projectColor,
       name: project.name,
@@ -416,34 +590,65 @@ class _HomePageState extends State<HomePage> with WindowListener {
     return IconButton(
       tooltip: tooltip,
       icon: Icon(icon, size: 17),
-      style: ButtonStyle(
-        fixedSize: const WidgetStatePropertyAll(Size(40, 36)),
-        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-        shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
-        animationDuration: const Duration(milliseconds: 140),
-        foregroundColor: WidgetStateProperty.resolveWith((states) {
-          if (danger && _isDangerButtonActive(states)) {
-            return scheme.error;
-          }
-          return active ? scheme.primary : scheme.onSurfaceVariant;
-        }),
-        backgroundColor: WidgetStateProperty.resolveWith((states) {
-          if (!danger) return Colors.transparent;
-          if (states.contains(WidgetState.pressed)) {
-            return scheme.error.withValues(alpha: 0.18);
-          }
-          if (_isDangerButtonActive(states)) {
-            return scheme.error.withValues(alpha: 0.12);
-          }
-          return Colors.transparent;
-        }),
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      style: _panelIconButtonStyle(
+        scheme,
+        size: const Size(40, 36),
+        active: active,
+        danger: danger,
       ),
       onPressed: onPressed,
     );
   }
 
-  bool _isDangerButtonActive(Set<WidgetState> states) =>
+  ButtonStyle _panelIconButtonStyle(
+    ColorScheme scheme, {
+    required Size size,
+    bool active = false,
+    bool danger = false,
+  }) {
+    return ButtonStyle(
+      fixedSize: WidgetStatePropertyAll(size),
+      minimumSize: WidgetStatePropertyAll(size),
+      maximumSize: WidgetStatePropertyAll(size),
+      padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      shape: const WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(4)),
+        ),
+      ),
+      animationDuration: const Duration(milliseconds: 140),
+      foregroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) {
+          return scheme.onSurfaceVariant.withValues(alpha: 0.35);
+        }
+        if (danger && _isInteractiveButtonState(states)) return scheme.error;
+        return active ? scheme.primary : scheme.onSurfaceVariant;
+      }),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) return Colors.transparent;
+        if (danger) {
+          if (states.contains(WidgetState.pressed)) {
+            return scheme.error.withValues(alpha: 0.18);
+          }
+          if (_isInteractiveButtonState(states)) {
+            return scheme.error.withValues(alpha: 0.12);
+          }
+          return Colors.transparent;
+        }
+        if (states.contains(WidgetState.pressed)) {
+          return scheme.onSurface.withValues(alpha: 0.12);
+        }
+        if (_isInteractiveButtonState(states)) {
+          return scheme.onSurface.withValues(alpha: 0.07);
+        }
+        return Colors.transparent;
+      }),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+    );
+  }
+
+  bool _isInteractiveButtonState(Set<WidgetState> states) =>
       states.contains(WidgetState.hovered) ||
       states.contains(WidgetState.focused) ||
       states.contains(WidgetState.pressed);
@@ -504,6 +709,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
 
   Future<void> _pickProjectColor(BuildContext context, Project project) async {
     final scheme = Theme.of(context).colorScheme;
+    final defaultBlue = Theme.of(context).brightness == Brightness.dark
+        ? _defaultProjectBlueDark
+        : _defaultProjectBlue;
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -522,10 +730,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
+                      key: ValueKey('project-color-$value'),
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: value == 0 ? scheme.primary : Color(value),
+                        color: value == 0 ? defaultBlue : Color(value),
                         shape: BoxShape.circle,
                         border: Border.all(
                           color: project.colorValue == value
@@ -810,14 +1019,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
           return IconButton(
             icon: Icon(icon, size: 17),
             tooltip: tooltip,
-            style: const ButtonStyle(
-              fixedSize: WidgetStatePropertyAll(Size.square(36)),
-              minimumSize: WidgetStatePropertyAll(Size.square(36)),
-              maximumSize: WidgetStatePropertyAll(Size.square(36)),
-              padding: WidgetStatePropertyAll(EdgeInsets.zero),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            style: _panelIconButtonStyle(
+              scheme,
+              size: const Size.square(36),
+              active: active,
             ),
-            color: active ? scheme.primary : scheme.onSurfaceVariant,
             onPressed: onPressed,
           );
         }
@@ -930,11 +1136,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     ),
                     itemBuilder: (context, option, label, selected) =>
                         _SelectionColorOption(
-                      value: option.$1,
-                      color: option.$2,
-                      label: label,
-                      selected: selected,
-                    ),
+                          value: option.$1,
+                          color: option.$2,
+                          label: label,
+                          selected: selected,
+                        ),
                   ),
                 ),
                 const SizedBox(width: 3),
@@ -984,11 +1190,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
                     ),
                     itemBuilder: (context, option, label, selected) =>
                         _SelectionColorOption(
-                      value: option.$1,
-                      color: option.$2,
-                      label: label,
-                      selected: selected,
-                    ),
+                          value: option.$1,
+                          color: option.$2,
+                          label: label,
+                          selected: selected,
+                        ),
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -1167,8 +1373,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
             .toDouble();
         _todoExpanded = false;
       } else {
-        _todoHeightBeforeExpand =
-            _todoPanelHeight.clamp(_todoHeaderHeight, maxHeight).toDouble();
+        _todoHeightBeforeExpand = _todoPanelHeight
+            .clamp(_todoHeaderHeight, maxHeight)
+            .toDouble();
         _todoPanelHeight = maxHeight;
         _todoExpanded = true;
       }
@@ -1181,8 +1388,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
         _todoPanelHeight = maxHeight;
       } else {
         _todoHeightBeforeExpand = _todoPanelHeight;
-        _todoPanelHeight =
-            _todoPanelHeight.clamp(_todoHeaderHeight, maxHeight).toDouble();
+        _todoPanelHeight = _todoPanelHeight
+            .clamp(_todoHeaderHeight, maxHeight)
+            .toDouble();
       }
       _todoExpanded = false;
       _resizingTodoPanel = true;
@@ -1240,11 +1448,11 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ),
           )
         : ListView(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             children: [
               for (final group in groups) ...[
                 Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 2),
+                  padding: const EdgeInsets.only(top: 4, bottom: 2),
                   child: Text(
                     group.label,
                     style: TextStyle(
@@ -1299,7 +1507,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
         curve: Curves.easeOut,
         height: _todoHeaderHeight,
         color: _todoHeaderHovered
-            ? scheme.primary.withValues(alpha: 0.055)
+            ? scheme.onSurface.withValues(alpha: 0.06)
             : Colors.transparent,
         child: Row(
           children: [
@@ -1349,35 +1557,10 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ),
             IconButton(
               tooltip: '清除已完成待办',
-              style: ButtonStyle(
-                fixedSize: const WidgetStatePropertyAll(Size.square(40)),
-                padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-                shape: const WidgetStatePropertyAll(
-                  RoundedRectangleBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(4)),
-                  ),
-                ),
-                animationDuration: const Duration(milliseconds: 140),
-                foregroundColor: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.disabled)) {
-                    return scheme.onSurfaceVariant.withValues(alpha: 0.35);
-                  }
-                  if (_isDangerButtonActive(states)) return scheme.error;
-                  return scheme.onSurfaceVariant;
-                }),
-                backgroundColor: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.disabled)) {
-                    return Colors.transparent;
-                  }
-                  if (states.contains(WidgetState.pressed)) {
-                    return scheme.error.withValues(alpha: 0.18);
-                  }
-                  if (_isDangerButtonActive(states)) {
-                    return scheme.error.withValues(alpha: 0.12);
-                  }
-                  return Colors.transparent;
-                }),
-                overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+              style: _panelIconButtonStyle(
+                scheme,
+                size: const Size.square(40),
+                danger: true,
               ),
               icon: AnimatedRotation(
                 turns: _clearingDone ? 1 : 0,
@@ -1391,10 +1574,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
             ),
             IconButton(
               tooltip: _todoExpanded ? '收起待办区' : '待办区占满面板',
-              style: const ButtonStyle(
-                fixedSize: WidgetStatePropertyAll(Size.square(40)),
-                padding: WidgetStatePropertyAll(EdgeInsets.zero),
-              ),
+              style: _panelIconButtonStyle(scheme, size: const Size.square(40)),
               icon: AnimatedSwitcher(
                 duration: _todoMotion,
                 transitionBuilder: (child, animation) =>
@@ -1403,7 +1583,6 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   _todoExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
                   key: ValueKey(_todoExpanded),
                   size: 18,
-                  color: scheme.onSurfaceVariant,
                 ),
               ),
               onPressed: () => _toggleTodoExpanded(maxHeight),
@@ -1470,8 +1649,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
     final scheme = Theme.of(context).colorScheme;
     // In the all-projects view each todo's checkbox follows its own
     // project's theme color; the default blue applies when unset.
-    final accent =
-        project.colorValue == 0 ? scheme.primary : Color(project.colorValue);
+    final accent = project.colorValue == 0
+        ? scheme.primary
+        : Color(project.colorValue);
     final dismissing = _dismissingTodos.contains(animationKey);
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1506,8 +1686,9 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   style: TextStyle(
                     fontSize: _todoTextSize,
                     decoration: todo.done ? TextDecoration.lineThrough : null,
-                    color:
-                        todo.done ? scheme.onSurfaceVariant : scheme.onSurface,
+                    color: todo.done
+                        ? scheme.onSurfaceVariant
+                        : scheme.onSurface,
                   ),
                   child: Text(todo.text),
                 ),
@@ -1589,8 +1770,9 @@ class _SelectionPanelLayoutDelegate extends SingleChildLayoutDelegate {
       _margin,
       double.infinity,
     );
-    final left =
-        (target.dx - childSize.width / 2).clamp(_margin, maxLeft).toDouble();
+    final left = (target.dx - childSize.width / 2)
+        .clamp(_margin, maxLeft)
+        .toDouble();
     var top = target.dy + _gap;
     if (top + childSize.height > size.height - _margin) {
       top = target.dy - childSize.height - _gap;
@@ -1636,8 +1818,8 @@ class _SelectionColorOption extends StatelessWidget {
         Text(
           label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: selected ? scheme.primary : scheme.onSurface,
-              ),
+            color: selected ? scheme.primary : scheme.onSurface,
+          ),
         ),
       ],
     );
@@ -1722,6 +1904,7 @@ class _SelectionColorSwatch extends StatelessWidget {
 /// short background animation.
 class _ProjectTab extends StatefulWidget {
   const _ProjectTab({
+    super.key,
     required this.selected,
     required this.projectColor,
     required this.name,

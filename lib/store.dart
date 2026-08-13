@@ -9,13 +9,17 @@ import 'todos.dart';
 
 typedef _PendingTodoFormat = ({int index, int length, String state});
 
+enum ClosePreference { ask, hideToTray, exitApplication }
+
 /// Central state holder: projects, selection, quill controllers, persistence.
 class AppStore extends ChangeNotifier {
   static const _storageKey = 'sticky_panel_data_v2';
   static const _legacyStorageKey = 'sticky_panel_data_v1';
+  static const _closePreferenceKey = 'sticky_panel_close_preference';
 
   final List<Project> projects = [];
   int selectedIndex = 0;
+  ClosePreference closePreference = ClosePreference.ask;
 
   /// One controller per project, created lazily and kept so undo history
   /// and selection survive project switches.
@@ -35,8 +39,9 @@ class AppStore extends ChangeNotifier {
       try {
         document = project.docJson.isEmpty
             ? Document()
-            : Document.fromJson(_sanitizeOps(
-                jsonDecode(project.docJson) as List<dynamic>));
+            : Document.fromJson(
+                _sanitizeOps(jsonDecode(project.docJson) as List<dynamic>),
+              );
       } catch (_) {
         document = Document();
       }
@@ -57,8 +62,12 @@ class AppStore extends ChangeNotifier {
       );
       _PendingTodoFormat? pendingTodoFormat;
       controller.onReplaceText = (index, len, data) {
-        pendingTodoFormat =
-            _todoFormatForReplacement(controller.document, index, len, data);
+        pendingTodoFormat = _todoFormatForReplacement(
+          controller.document,
+          index,
+          len,
+          data,
+        );
         return true;
       };
       controller.addListener(() {
@@ -145,10 +154,7 @@ class AppStore extends ChangeNotifier {
       if (attributes == null ||
           !attributes.containsKey(kTodoAttributeKey) ||
           !data.contains('\n')) {
-        cleaned.add({
-          'insert': data,
-          'attributes': ?attributes,
-        });
+        cleaned.add({'insert': data, 'attributes': ?attributes});
         continue;
       }
       final lineAttributes = Map<String, dynamic>.from(attributes)
@@ -208,7 +214,10 @@ class AppStore extends ChangeNotifier {
     try {
       for (final pos in positions.reversed) {
         controller.formatText(
-            pos, 1, Attribute.clone(todoAttribute('open'), null));
+          pos,
+          1,
+          Attribute.clone(todoAttribute('open'), null),
+        );
       }
     } finally {
       _sanitizing = false;
@@ -217,17 +226,27 @@ class AppStore extends ChangeNotifier {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
+    closePreference = switch (prefs.getString(_closePreferenceKey)) {
+      'hideToTray' => ClosePreference.hideToTray,
+      'exitApplication' => ClosePreference.exitApplication,
+      _ => ClosePreference.ask,
+    };
     final raw = prefs.getString(_storageKey);
     if (raw != null) {
       try {
         final json = jsonDecode(raw) as Map<String, dynamic>;
         projects
           ..clear()
-          ..addAll((json['projects'] as List<dynamic>? ?? [])
-              .map((e) => Project.fromJson(e as Map<String, dynamic>)));
-        selectedIndex = (json['selectedIndex'] as num?)
-                ?.toInt()
-                .clamp(0, projects.isEmpty ? 0 : projects.length - 1) ??
+          ..addAll(
+            (json['projects'] as List<dynamic>? ?? []).map(
+              (e) => Project.fromJson(e as Map<String, dynamic>),
+            ),
+          );
+        selectedIndex =
+            (json['selectedIndex'] as num?)?.toInt().clamp(
+              0,
+              projects.isEmpty ? 0 : projects.length - 1,
+            ) ??
             0;
       } catch (_) {
         // Corrupted data: start fresh rather than crash.
@@ -269,15 +288,20 @@ class AppStore extends ChangeNotifier {
             }(),
         ];
         if (ops.isEmpty) ops.add(const {'insert': '\n'});
-        projects.add(Project(
-          id: map['id'] as String? ?? _newId(),
-          name: map['name'] as String? ?? '未命名项目',
-          docJson: jsonEncode(ops),
-        ));
+        projects.add(
+          Project(
+            id: map['id'] as String? ?? _newId(),
+            name: map['name'] as String? ?? '未命名项目',
+            docJson: jsonEncode(ops),
+          ),
+        );
       }
       selectedIndex =
-          (json['selectedIndex'] as num?)?.toInt().clamp(0, projects.isEmpty ? 0 : projects.length - 1) ??
-              0;
+          (json['selectedIndex'] as num?)?.toInt().clamp(
+            0,
+            projects.isEmpty ? 0 : projects.length - 1,
+          ) ??
+          0;
       _save();
     } catch (_) {
       // Unreadable legacy data: ignore and start fresh.
@@ -298,6 +322,12 @@ class AppStore extends ChangeNotifier {
   /// Save without notifying listeners.
   void persist() => _save();
 
+  Future<void> setClosePreference(ClosePreference value) async {
+    closePreference = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_closePreferenceKey, value.name);
+  }
+
   void selectProject(int index) {
     if (index < 0 || index >= projects.length) return;
     selectedIndex = index;
@@ -307,7 +337,8 @@ class AppStore extends ChangeNotifier {
 
   void addProject(String name) {
     projects.add(
-        Project(id: _newId(), name: name.trim().isEmpty ? '新项目' : name.trim()));
+      Project(id: _newId(), name: name.trim().isEmpty ? '新项目' : name.trim()),
+    );
     selectedIndex = projects.length - 1;
     notifyListeners();
     _save();
@@ -345,7 +376,11 @@ class AppStore extends ChangeNotifier {
   /// never touching newline characters (attributes on `\n` leak into text
   /// typed afterwards).
   static void _formatInlineSkippingNewlines(
-      QuillController controller, int start, int length, Attribute attribute) {
+    QuillController controller,
+    int start,
+    int length,
+    Attribute attribute,
+  ) {
     final plain = controller.document.toPlainText();
     final end = start + length;
     var i = start;
@@ -363,7 +398,11 @@ class AppStore extends ChangeNotifier {
   void markTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     _formatInlineSkippingNewlines(
-        controller, start, length, todoAttribute('open'));
+      controller,
+      start,
+      length,
+      todoAttribute('open'),
+    );
   }
 
   /// Remove the todo marking from a range, keeping the text itself. Also
@@ -371,18 +410,31 @@ class AppStore extends ChangeNotifier {
   void unmarkTodoSpan(Project project, int start, int length) {
     final controller = controllerFor(project);
     controller.formatText(
-        start, length, Attribute.clone(todoAttribute('open'), null));
+      start,
+      length,
+      Attribute.clone(todoAttribute('open'), null),
+    );
     controller.formatText(
-        start, length, Attribute.clone(Attribute.underline, null));
+      start,
+      length,
+      Attribute.clone(Attribute.underline, null),
+    );
     controller.formatText(
-        start, length, Attribute.clone(Attribute.strikeThrough, null));
+      start,
+      length,
+      Attribute.clone(Attribute.strikeThrough, null),
+    );
   }
 
   /// Flip a todo span between done and open.
   void toggleSpanDone(Project project, TodoSpan span) {
     final controller = controllerFor(project);
-    _formatInlineSkippingNewlines(controller, span.start, span.length,
-        todoAttribute(span.done ? 'open' : 'done'));
+    _formatInlineSkippingNewlines(
+      controller,
+      span.start,
+      span.length,
+      todoAttribute(span.done ? 'open' : 'done'),
+    );
   }
 
   /// Unmark all completed todo spans in a project (the text stays on the
