@@ -48,7 +48,9 @@ class AppStore extends ChangeNotifier {
         // Windows. Notes in Sticky Panel are text-first, so skip that fragile
         // probe and paste through the reliable system text format directly.
         config: const QuillControllerConfig(
+          // ignore: experimental_member_use
           clipboardConfig: QuillClipboardConfig(
+            // ignore: experimental_member_use
             enableExternalRichPaste: false,
           ),
         ),

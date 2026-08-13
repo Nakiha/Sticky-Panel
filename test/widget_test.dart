@@ -407,6 +407,7 @@ void main() {
     final store = await pumpTodoApp(tester);
     final controller = store.controllerFor(store.selected!);
     expect(
+      // ignore: experimental_member_use
       controller.config.clipboardConfig?.enableExternalRichPaste,
       isFalse,
     );
