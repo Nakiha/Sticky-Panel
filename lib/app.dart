@@ -137,6 +137,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
   bool _alwaysOnTop = true;
   bool _todoExpanded = false;
+  bool _animatingTodoExpansion = false;
+  bool _todoTextNavigationLocked = true;
   bool _todoShowAll = false;
   bool _todoHeaderHovered = false;
   bool _resizingTodoPanel = false;
@@ -482,6 +484,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     setState(() {
       if (_todoExpanded) {
         _todoExpanded = false;
+        _animatingTodoExpansion = false;
         _todoPanelHeight = _todoHeightBeforeExpand;
       }
     });
@@ -567,6 +570,10 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     final todoHeight = requestedHeight
         .clamp(_todoHeaderHeight, maxTodoHeight)
         .toDouble();
+    final pinExpandedTodo = _todoExpanded && !_animatingTodoExpansion;
+    final todoResizeDuration = _resizingTodoPanel || pinExpandedTodo
+        ? Duration.zero
+        : _panelMotion;
 
     return Column(
       children: [
@@ -583,9 +590,13 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           const Spacer(),
         AnimatedContainer(
           key: const ValueKey('todo-panel'),
-          duration: _resizingTodoPanel ? Duration.zero : _panelMotion,
+          // Once fully expanded, follow window-size changes in the same frame.
+          // Animating every new constraint made the editor flash underneath
+          // while the user was resizing the window.
+          duration: todoResizeDuration,
           curve: Curves.easeInOutCubic,
           height: todoHeight,
+          onEnd: _finishTodoExpansion,
           child: _buildTodoSection(context, maxTodoHeight),
         ),
       ],
@@ -1649,14 +1660,21 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             .clamp(_todoHeaderHeight, maxHeight)
             .toDouble();
         _todoExpanded = false;
+        _animatingTodoExpansion = false;
       } else {
         _todoHeightBeforeExpand = _todoPanelHeight
             .clamp(_todoHeaderHeight, maxHeight)
             .toDouble();
+        _animatingTodoExpansion = _todoPanelHeight < maxHeight - 0.5;
         _todoPanelHeight = maxHeight;
         _todoExpanded = true;
       }
     });
+  }
+
+  void _finishTodoExpansion() {
+    if (!_animatingTodoExpansion || !mounted) return;
+    setState(() => _animatingTodoExpansion = false);
   }
 
   void _startTodoResize(double maxHeight) {
@@ -1671,6 +1689,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             .toDouble();
       }
       _todoExpanded = false;
+      _animatingTodoExpansion = false;
       _resizingTodoPanel = true;
     });
   }
@@ -1687,6 +1706,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     setState(() {
       _resizingTodoPanel = false;
       _todoExpanded = _todoPanelHeight >= maxHeight - 0.5;
+      _animatingTodoExpansion = false;
     });
   }
 
@@ -1827,6 +1847,32 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             // text changes width.
             if (store.projects.length > 1) _buildScopeToggle(context),
             IconButton(
+              tooltip: _todoTextNavigationLocked
+                  ? '允许点击待办跳转到原文'
+                  : '锁定待办文字（避免误触跳转）',
+              style: _panelIconButtonStyle(
+                scheme,
+                size: const Size.square(40),
+                active: _todoTextNavigationLocked,
+              ),
+              icon: AnimatedSwitcher(
+                duration: _todoMotion,
+                transitionBuilder: (child, animation) =>
+                    ScaleTransition(scale: animation, child: child),
+                child: Icon(
+                  _todoTextNavigationLocked
+                      ? Icons.lock_outline
+                      : Icons.lock_open,
+                  key: ValueKey(_todoTextNavigationLocked),
+                  size: 17,
+                ),
+              ),
+              onPressed: () => setState(
+                () => _todoTextNavigationLocked =
+                    !_todoTextNavigationLocked,
+              ),
+            ),
+            IconButton(
               tooltip: '清除已完成待办',
               style: _panelIconButtonStyle(
                 scheme,
@@ -1951,7 +1997,9 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           const SizedBox(width: 8),
           Expanded(
             child: GestureDetector(
-              onTap: () => _revealSpan(project, todo),
+              onTap: _todoTextNavigationLocked
+                  ? null
+                  : () => _revealSpan(project, todo),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                 decoration: BoxDecoration(
