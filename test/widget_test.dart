@@ -1004,9 +1004,12 @@ void main() {
           activator.control &&
           !activator.meta;
     });
-    final action = editor.config.customActions![shortcut.value.runtimeType];
-    expect(action, isNotNull);
-    action!.invoke(shortcut.value);
+    expect(
+      editor.config.customActions,
+      contains(shortcut.value.runtimeType),
+    );
+    final editorLine = find.byType(EditableTextLine).first;
+    Actions.invoke(tester.element(editorLine), shortcut.value);
     await tester.pump();
 
     final spans = parseTodoSpans(controller.document.toDelta().toJson());
