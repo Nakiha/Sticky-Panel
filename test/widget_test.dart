@@ -382,7 +382,7 @@ void main() {
     expect(tester.widget<AnimatedContainer>(panel).duration, Duration.zero);
   });
 
-  testWidgets('todo text navigation is locked by default and can be enabled', (
+  testWidgets('todo text jumps to source only on double-tap', (
     tester,
   ) async {
     final store = await pumpTodoApp(tester);
@@ -395,17 +395,16 @@ void main() {
 
     await tester.tap(find.byTooltip('待办区占满面板'));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('允许点击待办跳转到原文'), findsOneWidget);
 
+    // Single tap: nothing happens (no jump, panel stays expanded).
     await tester.tap(todoText);
     await tester.pumpAndSettle();
     expect(find.byTooltip('收起待办区'), findsOneWidget);
     expect(controller.selection.isCollapsed, isTrue);
 
-    await tester.tap(find.byTooltip('允许点击待办跳转到原文'));
-    await tester.pump();
-    expect(find.byTooltip('锁定待办文字（避免误触跳转）'), findsOneWidget);
-
+    // Double tap: jump to the source span and collapse the panel.
+    await tester.tap(todoText);
+    await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(todoText);
     await tester.pumpAndSettle();
     expect(find.byTooltip('待办区占满面板'), findsOneWidget);
@@ -482,7 +481,6 @@ void main() {
         .singleWhere((button) => button.tooltip == tooltip);
 
     final clear = button('清除已完成待办');
-    final navigationLock = button('允许点击待办跳转到原文');
     final expand = button('待办区占满面板');
     final add = button('新建项目');
     final pin = button('取消置顶');
@@ -491,16 +489,11 @@ void main() {
     final scheme = Theme.of(tester.element(find.byTooltip('关闭'))).colorScheme;
 
     expect(clear.style?.fixedSize?.resolve({}), const Size.square(40));
-    expect(
-      navigationLock.style?.fixedSize?.resolve({}),
-      const Size.square(40),
-    );
     expect(expand.style?.fixedSize?.resolve({}), const Size.square(40));
     expect(add.style?.fixedSize?.resolve({}), const Size(32, 28));
     expect(pin.style?.fixedSize?.resolve({}), const Size(32, 28));
     for (final iconButton in [
       clear,
-      navigationLock,
       expand,
       minimize,
       close,
@@ -520,7 +513,7 @@ void main() {
         const BorderRadius.all(Radius.circular(7)),
       );
     }
-    for (final iconButton in [navigationLock, expand, add, pin, minimize]) {
+    for (final iconButton in [expand, add, pin, minimize]) {
       expect(
         iconButton.style?.backgroundColor?.resolve({WidgetState.hovered}),
         scheme.onSurface.withValues(alpha: 0.07),
@@ -528,10 +521,6 @@ void main() {
     }
     expect(pin.style?.foregroundColor?.resolve({}), scheme.onSurface);
     expect(add.style?.foregroundColor?.resolve({}), scheme.onSurfaceVariant);
-    expect(
-      navigationLock.style?.foregroundColor?.resolve({}),
-      scheme.primary,
-    );
     expect(
       clear.style?.backgroundColor?.resolve({WidgetState.hovered}),
       scheme.error.withValues(alpha: 0.12),
@@ -718,7 +707,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Single scope button: labelled with the current scope, tap to flip.
-    await tester.tap(find.text('本项目'));
+    await tester.tap(find.byTooltip('汇总全部项目'));
     await tester.pumpAndSettle();
 
     final greenIndicator = tester.widget<Icon>(

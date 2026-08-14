@@ -138,7 +138,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   bool _alwaysOnTop = true;
   bool _todoExpanded = false;
   bool _animatingTodoExpansion = false;
-  bool _todoTextNavigationLocked = true;
   bool _todoShowAll = false;
   bool _todoHeaderHovered = false;
   bool _resizingTodoPanel = false;
@@ -1847,32 +1846,6 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             // text changes width.
             if (store.projects.length > 1) _buildScopeToggle(context),
             IconButton(
-              tooltip: _todoTextNavigationLocked
-                  ? '允许点击待办跳转到原文'
-                  : '锁定待办文字（避免误触跳转）',
-              style: _panelIconButtonStyle(
-                scheme,
-                size: const Size.square(40),
-                active: _todoTextNavigationLocked,
-              ),
-              icon: AnimatedSwitcher(
-                duration: _todoMotion,
-                transitionBuilder: (child, animation) =>
-                    ScaleTransition(scale: animation, child: child),
-                child: Icon(
-                  _todoTextNavigationLocked
-                      ? Icons.lock_outline
-                      : Icons.lock_open,
-                  key: ValueKey(_todoTextNavigationLocked),
-                  size: 17,
-                ),
-              ),
-              onPressed: () => setState(
-                () => _todoTextNavigationLocked =
-                    !_todoTextNavigationLocked,
-              ),
-            ),
-            IconButton(
               tooltip: '清除已完成待办',
               style: _panelIconButtonStyle(
                 scheme,
@@ -1910,37 +1883,24 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     );
   }
 
-  /// One compact button showing the current scope; tapping flips to the
-  /// other scope. A two-pill segmented control plus three action buttons
-  /// crowded the header until the count text got clipped.
+  /// Compact icon-only scope button: layers icon, accented while the
+  /// all-projects view is on. Text pills drew too much attention and
+  /// shifted width between states.
   Widget _buildScopeToggle(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: _todoShowAll ? '只看当前项目' : '汇总全部项目',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => setState(() => _todoShowAll = !_todoShowAll),
-        child: AnimatedContainer(
-          duration: _todoMotion,
-          curve: Curves.easeOut,
-          height: 28,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: _todoShowAll
-                ? scheme.primary
-                : scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(11),
-          ),
-          child: Text(
-            _todoShowAll ? '全部' : '本项目',
-            style: TextStyle(
-              fontSize: 11,
-              color: _todoShowAll ? Colors.white : scheme.onSurfaceVariant,
-            ),
-          ),
-        ),
+    return IconButton(
+      tooltip: _todoShowAll ? '只看当前项目' : '汇总全部项目',
+      style: _panelIconButtonStyle(
+        scheme,
+        size: const Size.square(40),
+        active: _todoShowAll,
       ),
+      icon: Icon(
+        _todoShowAll ? Icons.layers : Icons.layers_outlined,
+        key: ValueKey(_todoShowAll),
+        size: 17,
+      ),
+      onPressed: () => setState(() => _todoShowAll = !_todoShowAll),
     );
   }
 
@@ -1984,9 +1944,9 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           const SizedBox(width: 8),
           Expanded(
             child: GestureDetector(
-              onTap: _todoTextNavigationLocked
-                  ? null
-                  : () => _revealSpan(project, todo),
+              // Single tap does nothing; double-tap jumps to the source
+              // span on the board. (The old lock toggle is gone.)
+              onDoubleTap: () => _revealSpan(project, todo),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                 decoration: BoxDecoration(
