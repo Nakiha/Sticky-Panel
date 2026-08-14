@@ -43,6 +43,7 @@ class AppMenuCombo<T> extends StatefulWidget {
   final IconData? Function(T value)? iconFor;
   final bool notifyOnReselect;
   final bool enabled;
+  final Listenable? closeListenable;
 
   const AppMenuCombo({
     super.key,
@@ -72,6 +73,7 @@ class AppMenuCombo<T> extends StatefulWidget {
     this.iconFor,
     this.notifyOnReselect = false,
     this.enabled = true,
+    this.closeListenable,
   });
 
   @override
@@ -90,18 +92,33 @@ class _AppMenuComboState<T> extends State<AppMenuCombo<T>> {
   bool get _isOpen => _menuController.isOpen;
 
   @override
+  void initState() {
+    super.initState();
+    widget.closeListenable?.addListener(_closeMenu);
+  }
+
+  @override
   void didUpdateWidget(covariant AppMenuCombo<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.closeListenable != widget.closeListenable) {
+      oldWidget.closeListenable?.removeListener(_closeMenu);
+      widget.closeListenable?.addListener(_closeMenu);
+    }
     if (!widget.enabled && _isOpen) {
-      _menuController.close();
+      _closeMenu();
     }
   }
 
   @override
   void dispose() {
-    if (_isOpen) _menuController.close();
+    widget.closeListenable?.removeListener(_closeMenu);
+    _closeMenu();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _closeMenu() {
+    if (_isOpen) _menuController.close();
   }
 
   void _toggleMenu() {

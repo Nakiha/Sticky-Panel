@@ -167,6 +167,10 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   /// though HomePage-level setState cannot reach into the cache.
   final _selectingNotifier = ValueNotifier<bool>(false);
 
+  /// Closes root-overlay menus before the todo panel starts changing layout.
+  /// Waiting for the selection toolbar's next rebuild is one frame too late.
+  final _selectionPanelDismissals = ValueNotifier<int>(0);
+
   AppStore get store => widget.store;
 
   @override
@@ -239,6 +243,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       preference.dispose();
     }
     _selectingNotifier.dispose();
+    _selectionPanelDismissals.dispose();
     super.dispose();
   }
 
@@ -1313,6 +1318,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     foregroundColor: scheme.onSurfaceVariant,
                     iconSize: 15,
                     enabled: visible,
+                    closeListenable: _selectionPanelDismissals,
                   ),
                 ),
                 const SizedBox(width: 3),
@@ -1345,6 +1351,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     iconSize: 15,
                     showSelectedCheck: false,
                     enabled: visible,
+                    closeListenable: _selectionPanelDismissals,
                     buttonBuilder: (context, option, open) => Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -1399,6 +1406,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                     iconSize: 15,
                     showSelectedCheck: false,
                     enabled: visible,
+                    closeListenable: _selectionPanelDismissals,
                     buttonBuilder: (context, option, open) => Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -1599,6 +1607,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     if (project == null) return;
     final controller = store.controllerFor(project);
     final selection = controller.selection;
+    _selectionPanelDismissals.value++;
     _selectionPreferenceFor(project).value = null;
     _selectingNotifier.value = false;
     if (selection.isValid && !selection.isCollapsed) {
