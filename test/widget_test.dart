@@ -717,7 +717,8 @@ void main() {
     store.selectProject(0);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('全部'));
+    // Single scope button: labelled with the current scope, tap to flip.
+    await tester.tap(find.text('本项目'));
     await tester.pumpAndSettle();
 
     final greenIndicator = tester.widget<Icon>(

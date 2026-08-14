@@ -1910,12 +1910,16 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     );
   }
 
+  /// One compact button showing the current scope; tapping flips to the
+  /// other scope. A two-pill segmented control plus three action buttons
+  /// crowded the header until the count text got clipped.
   Widget _buildScopeToggle(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    Widget pill(String label, bool active, VoidCallback onTap) {
-      return GestureDetector(
+    return Tooltip(
+      message: _todoShowAll ? '只看当前项目' : '汇总全部项目',
+      child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
+        onTap: () => setState(() => _todoShowAll = !_todoShowAll),
         child: AnimatedContainer(
           duration: _todoMotion,
           curve: Curves.easeOut,
@@ -1923,36 +1927,19 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           alignment: Alignment.center,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: active ? scheme.primary : Colors.transparent,
-            borderRadius: BorderRadius.circular(9),
+            color: _todoShowAll
+                ? scheme.primary
+                : scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(11),
           ),
           child: Text(
-            label,
+            _todoShowAll ? '全部' : '本项目',
             style: TextStyle(
               fontSize: 11,
-              color: active ? Colors.white : scheme.onSurfaceVariant,
+              color: _todoShowAll ? Colors.white : scheme.onSurfaceVariant,
             ),
           ),
         ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(11),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          pill(
-            '本项目',
-            !_todoShowAll,
-            () => setState(() => _todoShowAll = false),
-          ),
-          pill('全部', _todoShowAll, () => setState(() => _todoShowAll = true)),
-        ],
       ),
     );
   }
