@@ -236,6 +236,37 @@ void main() {
     expect(spans[1].text, '要买冰淇淋');
   });
 
+  test('marking a multi-line selection skips heading lines', () {
+    SharedPreferences.setMockInitialValues({});
+    final project = Project(
+      id: 'p1',
+      name: '项目A',
+      docJson: jsonEncode([
+        {'insert': '标题'},
+        {
+          'insert': '\n',
+          'attributes': {'header': 2},
+        },
+        {'insert': '第一项\n第二项\n'},
+      ]),
+    );
+    final store = AppStore()..projects.add(project);
+    addTearDown(store.dispose);
+    final controller = store.controllerFor(project);
+
+    store.markTodoSpan(project, 0, controller.document.length);
+
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    expect(spans.map((span) => span.text), ['第一项', '第二项']);
+    expect(
+      controller
+          .document
+          .collectStyle(0, 2)
+          .attributes[kTodoAttributeKey],
+      isNull,
+    );
+  });
+
   Future<AppStore> pumpTodoApp(
     WidgetTester tester, {
     String? documentJson,
@@ -322,6 +353,66 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(panel).height, 180);
     expect(find.byTooltip('待办区占满面板'), findsOneWidget);
+  });
+
+  testWidgets('expanding todo panel immediately closes selection UI', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    final controller = store.controllerFor(store.selected!);
+    controller.updateSelection(
+      const TextSelection(baseOffset: 0, extentOffset: 2),
+      ChangeSource.local,
+    );
+    await tester.pumpAndSettle();
+
+    final panel = find.byKey(const ValueKey('selection-format-panel'));
+    await tester.tap(find.byKey(const ValueKey('font-size-combo')));
+    await tester.pump();
+    expect(find.byType(MenuItemButton), findsNWidgets(5));
+
+    final expand = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '待办区占满面板');
+    expand.onPressed!();
+    await tester.pump();
+
+    expect(controller.selection.isCollapsed, isTrue);
+    expect(find.byType(MenuItemButton), findsNothing);
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.ancestor(of: panel, matching: find.byType(AnimatedOpacity)),
+          )
+          .opacity,
+      0,
+    );
+    expect(find.byTooltip('收起待办区'), findsOneWidget);
+  });
+
+  testWidgets('wrapped todo indicators align with the first text line', (
+    tester,
+  ) async {
+    final longTodo = List.filled(
+      8,
+      '这是一条会在待办区内自动换行的很长待办内容',
+    ).join();
+    await pumpTodoApp(
+      tester,
+      documentJson: jsonEncode([
+        {
+          'insert': longTodo,
+          'attributes': {'todo': 'open'},
+        },
+        {'insert': '\n'},
+      ]),
+    );
+    await tester.pumpAndSettle();
+
+    final indicator = find.byKey(const ValueKey('todo-indicator-p1-0'));
+    final text = find.text(longTodo);
+    expect(tester.getRect(text).height, greaterThan(20));
+    expect(tester.getRect(indicator).top, closeTo(tester.getRect(text).top, 1));
   });
 
   testWidgets('todo header buttons fill the row and use danger hover styling', (
@@ -883,6 +974,45 @@ void main() {
     expect(hasPasteShortcut, isTrue);
   });
 
+  testWidgets('Ctrl+Enter marks selected body lines as todos', (tester) async {
+    final document = jsonEncode([
+      {'insert': '标题'},
+      {
+        'insert': '\n',
+        'attributes': {'header': 2},
+      },
+      {'insert': '第一项\n第二项\n'},
+    ]);
+    final store = await pumpTodoApp(tester, documentJson: document);
+    final controller = store.controllerFor(store.selected!);
+    controller.updateSelection(
+      TextSelection(
+        baseOffset: 0,
+        extentOffset: controller.document.length - 1,
+      ),
+      ChangeSource.local,
+    );
+    await tester.pump();
+
+    final editor = tester.widget<QuillEditor>(find.byType(QuillEditor));
+    final shortcut = editor.config.customShortcuts!.entries.singleWhere((
+      entry,
+    ) {
+      final activator = entry.key;
+      return activator is SingleActivator &&
+          activator.trigger == LogicalKeyboardKey.enter &&
+          activator.control &&
+          !activator.meta;
+    });
+    final action = editor.config.customActions![shortcut.value.runtimeType];
+    expect(action, isNotNull);
+    action!.invoke(shortcut.value);
+    await tester.pump();
+
+    final spans = parseTodoSpans(controller.document.toDelta().toJson());
+    expect(spans.map((span) => span.text), ['第一项', '第二项']);
+  });
+
   testWidgets('editing ordinary text keeps later todo row identities', (
     tester,
   ) async {
@@ -980,6 +1110,13 @@ void main() {
     expect(
       trayCalls.map((call) => call.method),
       containsAll(['setIcon', 'setToolTip', 'setContextMenu']),
+    );
+    expect(
+      trayCalls
+          .singleWhere((call) => call.method == 'setIcon')
+          .arguments
+          .toString(),
+      contains('tray_icon.ico'),
     );
     expect(
       trayCalls

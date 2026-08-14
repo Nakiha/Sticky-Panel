@@ -69,6 +69,7 @@ flutter:
 
   assets:
     - windows/runner/resources/app_icon.ico
+    - windows/runner/resources/tray_icon.ico
 
   # To add assets to your application, add an assets section, like this:
   # assets:

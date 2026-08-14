@@ -43,6 +43,10 @@ typedef _SelectionPanelPreference = ({
 });
 typedef _SelectionPanelAnchor = ({Rect selectionRect, double preferredX});
 
+class _ToggleTodoIntent extends Intent {
+  const _ToggleTodoIntent();
+}
+
 enum _CloseChoice { hideToTray, exitApplication }
 
 class StickyPanelApp extends StatelessWidget {
@@ -112,7 +116,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
-  static const _trayIconAsset = 'windows/runner/resources/app_icon.ico';
+  static const _trayIconAsset = 'windows/runner/resources/tray_icon.ico';
   static const _trayShowKey = 'show_window';
   static const _trayResetCloseKey = 'reset_close_preference';
   static const _trayExitKey = 'exit_app';
@@ -1101,6 +1105,19 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                   ): const PasteTextIntent(
                     SelectionChangedCause.keyboard,
                   ),
+                  SingleActivator(
+                    LogicalKeyboardKey.enter,
+                    control: !_isMac,
+                    meta: _isMac,
+                  ): const _ToggleTodoIntent(),
+                },
+                customActions: {
+                  _ToggleTodoIntent: CallbackAction<_ToggleTodoIntent>(
+                    onInvoke: (_) {
+                      _toggleTodoForSelection(project);
+                      return null;
+                    },
+                  ),
                 },
                 // The todo underline is derived from the custom `todo`
                 // attribute instead of a stored underline attribute, so the
@@ -1410,18 +1427,10 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
                 const SizedBox(width: 4),
                 iconBtn(
                   isTodo ? Icons.task_alt : Icons.playlist_add_check,
-                  isTodo ? '取消待办' : '列为待办',
+                  '${isTodo ? '取消待办' : '列为待办'} '
+                  '(${_isMac ? '⌘' : 'Ctrl'}+Enter)',
                   visible
-                      ? () {
-                          final start = selection.start;
-                          final length = selection.end - selection.start;
-                          if (isTodo) {
-                            _unmarkTodoSpanAnimated(project, start, length);
-                          } else {
-                            store.markTodoSpan(project, start, length);
-                          }
-                          _focusFor(project).requestFocus();
-                        }
+                      ? () => _toggleTodoForSelection(project)
                       : () {},
                   active: isTodo,
                 ),
@@ -1448,7 +1457,12 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
             delegate: _SelectionPanelLayoutDelegate(anchor: anchor),
             child: AnimatedOpacity(
               opacity: visible ? 1 : 0,
-              duration: const Duration(milliseconds: 120),
+              // Hiding must be immediate. Otherwise the todo panel can grow
+              // underneath a still-fading toolbar (and any root-overlay menu)
+              // for one or two frames.
+              duration: visible
+                  ? const Duration(milliseconds: 120)
+                  : Duration.zero,
               child: panel,
             ),
           ),
@@ -1561,6 +1575,40 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     if (mounted) _focusFor(project).requestFocus();
   }
 
+  void _toggleTodoForSelection(Project project) {
+    final controller = store.controllerFor(project);
+    final selection = controller.selection;
+    if (!selection.isValid || selection.isCollapsed) return;
+
+    final start = selection.start;
+    final length = selection.end - selection.start;
+    final isTodo = controller
+        .getSelectionStyle()
+        .attributes
+        .containsKey(kTodoAttributeKey);
+    if (isTodo) {
+      unawaited(_unmarkTodoSpanAnimated(project, start, length));
+    } else {
+      store.markTodoSpan(project, start, length);
+      _focusFor(project).requestFocus();
+    }
+  }
+
+  void _dismissSelectionPanel() {
+    final project = store.selected;
+    if (project == null) return;
+    final controller = store.controllerFor(project);
+    final selection = controller.selection;
+    _selectionPreferenceFor(project).value = null;
+    _selectingNotifier.value = false;
+    if (selection.isValid && !selection.isCollapsed) {
+      controller.updateSelection(
+        TextSelection.collapsed(offset: selection.extentOffset),
+        ChangeSource.local,
+      );
+    }
+  }
+
   Future<void> _clearCompleted(List<_TodoGroup> groups) async {
     if (_clearingDone) return;
     final completedKeys = <_TodoTileIdentity>{
@@ -1585,6 +1633,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   }
 
   void _toggleTodoExpanded(double maxHeight) {
+    if (!_todoExpanded) _dismissSelectionPanel();
     setState(() {
       if (_todoExpanded) {
         _todoPanelHeight = _todoHeightBeforeExpand
@@ -1602,6 +1651,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   }
 
   void _startTodoResize(double maxHeight) {
+    _dismissSelectionPanel();
     setState(() {
       if (_todoExpanded) {
         _todoPanelHeight = maxHeight;
@@ -1866,18 +1916,26 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
-            onTap: () => store.toggleSpanDone(project, todo),
-            child: AnimatedSwitcher(
-              duration: _todoMotion,
-              transitionBuilder: (child, animation) =>
-                  ScaleTransition(scale: animation, child: child),
-              child: Icon(
-                todo.done ? Icons.check_circle : Icons.radio_button_unchecked,
-                key: ValueKey('todo-indicator-${project.id}-${todo.start}'),
-                size: 17,
-                color: todo.done ? scheme.onSurfaceVariant : accent,
+          Padding(
+            // Match the first text line instead of centring against the full
+            // height of a wrapped todo, so every checkbox stays predictable.
+            padding: const EdgeInsets.only(top: 3),
+            child: GestureDetector(
+              onTap: () => store.toggleSpanDone(project, todo),
+              child: AnimatedSwitcher(
+                duration: _todoMotion,
+                transitionBuilder: (child, animation) =>
+                    ScaleTransition(scale: animation, child: child),
+                child: Icon(
+                  todo.done
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  key: ValueKey('todo-indicator-${project.id}-${todo.start}'),
+                  size: 17,
+                  color: todo.done ? scheme.onSurfaceVariant : accent,
+                ),
               ),
             ),
           ),

@@ -379,15 +379,25 @@ class AppStore extends ChangeNotifier {
     QuillController controller,
     int start,
     int length,
-    Attribute attribute,
-  ) {
+    Attribute attribute, {
+    bool skipHeaderLines = false,
+  }) {
     final plain = controller.document.toPlainText();
-    final end = start + length;
-    var i = start;
+    final boundedStart = start.clamp(0, plain.length);
+    final end = (start + length).clamp(boundedStart, plain.length);
+    var i = boundedStart;
     while (i < end) {
       var j = plain.indexOf('\n', i);
       if (j < 0 || j > end) j = end;
-      if (j > i) controller.formatText(i, j - i, attribute);
+      if (j > i) {
+        final isHeader = controller.document
+            .collectStyle(i, j - i)
+            .attributes
+            .containsKey(Attribute.header.key);
+        if (!skipHeaderLines || !isHeader) {
+          controller.formatText(i, j - i, attribute);
+        }
+      }
       i = j + 1;
     }
   }
@@ -402,6 +412,7 @@ class AppStore extends ChangeNotifier {
       start,
       length,
       todoAttribute('open'),
+      skipHeaderLines: true,
     );
   }
 
