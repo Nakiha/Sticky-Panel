@@ -368,6 +368,39 @@ void main() {
     expect(tester.getSize(panel).height, 40);
   });
 
+  testWidgets('todo header snaps directly at both ends of its drag range', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpTodoApp(tester);
+    final panel = find.byKey(const ValueKey('todo-panel'));
+    final header = find.byKey(const ValueKey('todo-header'));
+    final maxTodoHeight = tester.getSize(find.byType(Scaffold)).height - 36;
+    const minTodoHeight = 40.0;
+    final resizeTravel = maxTodoHeight - minTodoHeight;
+
+    final nearTopHeight = minTodoHeight + resizeTravel * 0.995;
+    await tester.drag(
+      header,
+      Offset(0, -(nearTopHeight - tester.getSize(panel).height)),
+    );
+    await tester.pump();
+    expect(tester.getSize(panel).height, maxTodoHeight);
+    expect(tester.widget<AnimatedContainer>(panel).duration, Duration.zero);
+    expect(find.byTooltip('收起待办区'), findsOneWidget);
+
+    final nearBottomHeight = minTodoHeight + resizeTravel * 0.005;
+    await tester.drag(
+      header,
+      Offset(0, maxTodoHeight - nearBottomHeight),
+    );
+    await tester.pump();
+    expect(tester.getSize(panel).height, minTodoHeight);
+    expect(tester.widget<AnimatedContainer>(panel).duration, Duration.zero);
+    expect(find.byTooltip('待办区占满面板'), findsOneWidget);
+  });
+
   testWidgets('todo panel expands and collapses back to its previous height', (
     tester,
   ) async {
@@ -384,6 +417,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(panel).height, 180);
     expect(find.byTooltip('待办区占满面板'), findsOneWidget);
+  });
+
+  testWidgets('collapsing caps a remembered high height at fifty percent', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpTodoApp(tester);
+    final panel = find.byKey(const ValueKey('todo-panel'));
+    final header = find.byKey(const ValueKey('todo-header'));
+    final scaffoldHeight = tester.getSize(find.byType(Scaffold)).height;
+    final maxTodoHeight = scaffoldHeight - 36;
+    const minTodoHeight = 40.0;
+    final highHeight =
+        minTodoHeight + (maxTodoHeight - minTodoHeight) * 0.9;
+
+    await tester.drag(
+      header,
+      Offset(0, -(highHeight - tester.getSize(panel).height)),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).height, greaterThan(maxTodoHeight * 0.8));
+    expect(find.byTooltip('待办区占满面板'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('待办区占满面板'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('收起待办区'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getSize(panel).height,
+      closeTo(maxTodoHeight * 0.5, 0.5),
+    );
   });
 
   testWidgets('expanded todo panel stays pinned while the window grows', (

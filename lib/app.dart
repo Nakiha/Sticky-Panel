@@ -124,6 +124,9 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   static final bool _isMac = defaultTargetPlatform == TargetPlatform.macOS;
   static const double _todoHeaderHeight = 40;
   static const double _defaultTodoPanelHeight = 180;
+  static const double _todoPanelSnapRatio = 0.1;
+  static const double _todoPanelMinSnapDistance = 24;
+  static const double _todoPanelMaxSnapDistance = 48;
   static const double _todoTextSize = 14;
   static const Locale _editorLocale = Locale('zh', 'CN');
   static const List<String> _editorFontFallbacks = [
@@ -142,6 +145,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   bool _todoShowAll = false;
   bool _todoHeaderHovered = false;
   bool _resizingTodoPanel = false;
+  bool _snappingTodoPanel = false;
   bool _closeDialogOpen = false;
   bool _trayReady = false;
   bool _exitRequested = false;
@@ -573,7 +577,8 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         .clamp(_todoHeaderHeight, maxTodoHeight)
         .toDouble();
     final pinExpandedTodo = _todoExpanded && !_animatingTodoExpansion;
-    final todoResizeDuration = _resizingTodoPanel || pinExpandedTodo
+    final todoResizeDuration =
+        _resizingTodoPanel || _snappingTodoPanel || pinExpandedTodo
         ? Duration.zero
         : _panelMotion;
 
@@ -1680,9 +1685,20 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     if (!_todoExpanded) _dismissSelectionPanel();
     setState(() {
       if (_todoExpanded) {
-        _todoPanelHeight = _todoHeightBeforeExpand
+        final previousHeight = _todoHeightBeforeExpand
             .clamp(_todoHeaderHeight, maxHeight)
             .toDouble();
+        final collapsedHeightCeiling = math.max(
+          _todoHeaderHeight,
+          maxHeight * 0.5,
+        );
+        // A remembered near-full height makes the collapse button appear to
+        // do nothing. Preserve genuinely compact heights, but always reveal
+        // at least half of the editor when leaving the full-panel state.
+        _todoPanelHeight = math.min(
+          previousHeight,
+          collapsedHeightCeiling,
+        );
         _todoExpanded = false;
         _animatingTodoExpansion = false;
       } else {
@@ -1714,6 +1730,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
       }
       _todoExpanded = false;
       _animatingTodoExpansion = false;
+      _snappingTodoPanel = false;
       _resizingTodoPanel = true;
     });
   }
@@ -1727,11 +1744,40 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   }
 
   void _endTodoResize(double maxHeight) {
+    final resizeTravel = maxHeight - _todoHeaderHeight;
+    final snapDistance = (resizeTravel * _todoPanelSnapRatio)
+        .clamp(
+          _todoPanelMinSnapDistance,
+          _todoPanelMaxSnapDistance,
+        )
+        .toDouble();
+    final distanceToTop = maxHeight - _todoPanelHeight;
+    final distanceToBottom = _todoPanelHeight - _todoHeaderHeight;
+    final snapToTop = distanceToTop <= snapDistance;
+    final snapToBottom = distanceToBottom <= snapDistance;
+    final shouldSnap = snapToTop || snapToBottom;
+
     setState(() {
       _resizingTodoPanel = false;
-      _todoExpanded = _todoPanelHeight >= maxHeight - 0.5;
+      _snappingTodoPanel = shouldSnap;
+      if (snapToTop) {
+        _todoPanelHeight = maxHeight;
+      } else if (snapToBottom) {
+        _todoPanelHeight = _todoHeaderHeight;
+      }
+      _todoExpanded = snapToTop || _todoPanelHeight >= maxHeight - 0.5;
       _animatingTodoExpansion = false;
     });
+
+    if (shouldSnap) {
+      // Keep a zero-duration layout for the snap frame. Clearing the flag in
+      // the following frame changes no geometry, so no intermediate height
+      // can flash between the drag position and its snapped endpoint.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_snappingTodoPanel) return;
+        setState(() => _snappingTodoPanel = false);
+      });
+    }
   }
 
   Widget _buildTodoSection(BuildContext context, double maxHeight) {
