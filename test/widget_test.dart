@@ -322,6 +322,37 @@ void main() {
     expect(textWidget('阶段一').style?.fontWeight, FontWeight.w700);
   });
 
+  testWidgets('empty todo state is concise, padded, and uses the action icon', (
+    tester,
+  ) async {
+    await pumpTodoApp(
+      tester,
+      documentJson: jsonEncode([
+        {'insert': '普通内容\n'},
+      ]),
+    );
+
+    final emptyState = find.byKey(const ValueKey('todo-empty-state'));
+    final padding = tester.widget<Padding>(emptyState);
+    final text = tester.widget<Text>(
+      find.descendant(
+        of: emptyState,
+        matching: find.text('划选文字后列为待办'),
+      ),
+    );
+    final icon = tester.widget<Icon>(
+      find.descendant(of: emptyState, matching: find.byType(Icon)),
+    );
+
+    expect(
+      padding.padding,
+      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+    );
+    expect(text.style?.fontSize, 14);
+    expect(icon.icon, Icons.playlist_add_check);
+    expect(find.textContaining('在编辑板里划选'), findsNothing);
+  });
+
   testWidgets('todo header drag resizes and clamps the panel', (tester) async {
     await pumpTodoApp(tester);
     final panel = find.byKey(const ValueKey('todo-panel'));
@@ -630,7 +661,6 @@ void main() {
 
     await tester.sendEventToBinding(
       PointerScrollEvent(
-        pointer: 1,
         position: tester.getCenter(strip),
         scrollDelta: const Offset(0, 120),
         kind: PointerDeviceKind.mouse,
@@ -761,6 +791,14 @@ void main() {
     // Single scope button: labelled with the current scope, tap to flip.
     await tester.tap(find.byTooltip('汇总全部项目'));
     await tester.pumpAndSettle();
+
+    final scopeButton = tester
+        .widgetList<IconButton>(find.byType(IconButton))
+        .singleWhere((button) => button.tooltip == '只看当前项目');
+    final scheme = Theme.of(
+      tester.element(find.byTooltip('只看当前项目')),
+    ).colorScheme;
+    expect(scopeButton.style?.foregroundColor?.resolve({}), scheme.onSurface);
 
     final greenIndicator = tester.widget<Icon>(
       find.byKey(const ValueKey('todo-indicator-p1-4')),

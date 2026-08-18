@@ -619,7 +619,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     final delta = event.scrollDelta;
     if (delta.dy == 0 || delta.dy.abs() <= delta.dx.abs()) return;
 
-    GestureBinding.instance.pointerSignalResolver.register(event, () {
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
       if (!_tabStripScrollController.hasClients) return;
       _tabStripScrollController.position.pointerScroll(delta.dy);
     });
@@ -1764,9 +1764,32 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
     final list = groups.isEmpty
         ? Center(
-            child: Text(
-              '在编辑板里划选一段文字，点浮动面板的 ☑ 列为待办',
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            child: Padding(
+              key: const ValueKey('todo-empty-state'),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 16,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.playlist_add_check,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      '划选文字后列为待办',
+                      style: TextStyle(
+                        fontSize: _todoTextSize,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           )
         : ListView(
@@ -1908,7 +1931,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     );
   }
 
-  /// Compact icon-only scope button: layers icon, accented while the
+  /// Compact icon-only scope button: layers icon, neutrally highlighted while
   /// all-projects view is on. Text pills drew too much attention and
   /// shifted width between states.
   Widget _buildScopeToggle(BuildContext context) {
@@ -1919,6 +1942,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
         scheme,
         size: const Size.square(40),
         active: _todoShowAll,
+        neutralActive: true,
       ),
       icon: Icon(
         _todoShowAll ? Icons.layers : Icons.layers_outlined,
