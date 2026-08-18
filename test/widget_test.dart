@@ -471,6 +471,27 @@ void main() {
     expect(tester.getRect(indicator).top, closeTo(tester.getRect(text).top, 1));
   });
 
+  testWidgets('todo indicator animates when hovered', (tester) async {
+    await pumpTodoApp(tester);
+    final indicator = find.byKey(const ValueKey('todo-indicator-p1-4'));
+    final hoverScale = find.ancestor(
+      of: indicator,
+      matching: find.byType(AnimatedScale),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+
+    expect(tester.widget<AnimatedScale>(hoverScale).scale, 1);
+    await mouse.moveTo(tester.getCenter(indicator));
+    await tester.pump();
+    expect(tester.widget<AnimatedScale>(hoverScale).scale, 1.1);
+
+    await mouse.moveTo(const Offset(700, 300));
+    await tester.pump();
+    expect(tester.widget<AnimatedScale>(hoverScale).scale, 1);
+    await mouse.removePointer();
+  });
+
   testWidgets('todo header buttons fill the row and use danger hover styling', (
     tester,
   ) async {
@@ -587,6 +608,37 @@ void main() {
     expect(pinRect.height, 28);
     expect(addRect.height, 28);
     expect(tester.getSize(minimize), const Size(40, 36));
+  });
+
+  testWidgets('vertical mouse wheel scrolls an overflowing tab strip', (
+    tester,
+  ) async {
+    final store = await pumpTodoApp(tester);
+    for (var index = 0; index < 10; index++) {
+      store.addProject('很长的项目标签 ${index + 2}');
+    }
+    await tester.pumpAndSettle();
+
+    final strip = find.byKey(const ValueKey('project-tab-strip'));
+    final scrollable = find.descendant(
+      of: strip,
+      matching: find.byType(Scrollable),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.maxScrollExtent, greaterThan(0));
+    expect(position.pixels, 0);
+
+    await tester.sendEventToBinding(
+      PointerScrollEvent(
+        pointer: 1,
+        position: tester.getCenter(strip),
+        scrollDelta: const Offset(0, 120),
+        kind: PointerDeviceKind.mouse,
+      ),
+    );
+    await tester.pump();
+
+    expect(position.pixels, greaterThan(0));
   });
 
   testWidgets('editor todo markers use a low accent line and grey done line', (

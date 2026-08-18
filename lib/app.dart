@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -148,6 +149,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
   double _todoPanelHeight = _defaultTodoPanelHeight;
   double _todoHeightBeforeExpand = _defaultTodoPanelHeight;
   final Set<_TodoTileIdentity> _dismissingTodos = {};
+  final ScrollController _tabStripScrollController = ScrollController();
 
   /// One focus node / scroll controller per project: all editors stay alive
   /// in an IndexedStack, so sharing a single ScrollController would attach
@@ -240,6 +242,7 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
     for (final controller in _editorScrollControllers.values) {
       controller.dispose();
     }
+    _tabStripScrollController.dispose();
     for (final preference in _selectionPanelPreferences.values) {
       preference.dispose();
     }
@@ -604,6 +607,24 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
 
   // ------------------------------------------------------------------ top bar
 
+  void _handleTabStripPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent ||
+        !_tabStripScrollController.hasClients) {
+      return;
+    }
+
+    // Horizontal touchpad gestures are already handled by Scrollable. Map
+    // only a vertical-dominant mouse wheel signal to the horizontal axis so
+    // the two paths do not apply the same movement twice.
+    final delta = event.scrollDelta;
+    if (delta.dy == 0 || delta.dy.abs() <= delta.dx.abs()) return;
+
+    GestureBinding.instance.pointerSignalResolver.register(event, () {
+      if (!_tabStripScrollController.hasClients) return;
+      _tabStripScrollController.position.pointerScroll(delta.dy);
+    });
+  }
+
   /// Edge-style title bar: pin first, then the project tabs and a trailing
   /// add button that stays attached to the last tab. Only the native window
   /// controls consume the full title-bar height.
@@ -632,27 +653,31 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
               padding: const EdgeInsets.all(4),
             ),
             Expanded(
-              child: SingleChildScrollView(
-                key: const ValueKey('project-tab-strip'),
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (
-                      var index = 0;
-                      index < store.projects.length;
-                      index++
-                    ) ...[
-                      if (index > 0) const SizedBox(width: 2),
-                      _buildTab(context, store.projects[index], index),
+              child: Listener(
+                onPointerSignal: _handleTabStripPointerSignal,
+                child: SingleChildScrollView(
+                  key: const ValueKey('project-tab-strip'),
+                  controller: _tabStripScrollController,
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (
+                        var index = 0;
+                        index < store.projects.length;
+                        index++
+                      ) ...[
+                        if (index > 0) const SizedBox(width: 2),
+                        _buildTab(context, store.projects[index], index),
+                      ],
+                      if (store.projects.isNotEmpty) const SizedBox(width: 2),
+                      _tabStripIcon(
+                        Icons.add,
+                        '新建项目',
+                        () => _editProjectName(context, null),
+                      ),
                     ],
-                    if (store.projects.isNotEmpty) const SizedBox(width: 2),
-                    _tabStripIcon(
-                      Icons.add,
-                      '新建项目',
-                      () => _editProjectName(context, null),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -1923,22 +1948,14 @@ class _HomePageState extends State<HomePage> with WindowListener, TrayListener {
           Padding(
             // Match the first text line instead of centring against the full
             // height of a wrapped todo, so every checkbox stays predictable.
-            padding: const EdgeInsets.only(top: 3),
-            child: GestureDetector(
-              onTap: () => store.toggleSpanDone(project, todo),
-              child: AnimatedSwitcher(
-                duration: _todoMotion,
-                transitionBuilder: (child, animation) =>
-                    ScaleTransition(scale: animation, child: child),
-                child: Icon(
-                  todo.done
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked,
-                  key: ValueKey('todo-indicator-${project.id}-${todo.start}'),
-                  size: 17,
-                  color: todo.done ? scheme.onSurfaceVariant : accent,
-                ),
+            padding: EdgeInsets.zero,
+            child: _TodoIndicatorButton(
+              indicatorKey: ValueKey(
+                'todo-indicator-${project.id}-${todo.start}',
               ),
+              done: todo.done,
+              color: todo.done ? scheme.onSurfaceVariant : accent,
+              onPressed: () => store.toggleSpanDone(project, todo),
             ),
           ),
           const SizedBox(width: 8),
@@ -2174,6 +2191,71 @@ class _SelectionColorSwatch extends StatelessWidget {
         child: value == null
             ? Icon(Icons.block, size: 9, color: scheme.onSurfaceVariant)
             : null,
+      ),
+    );
+  }
+}
+
+class _TodoIndicatorButton extends StatefulWidget {
+  const _TodoIndicatorButton({
+    required this.indicatorKey,
+    required this.done,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final Key indicatorKey;
+  final bool done;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  State<_TodoIndicatorButton> createState() => _TodoIndicatorButtonState();
+}
+
+class _TodoIndicatorButtonState extends State<_TodoIndicatorButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onPressed,
+        child: AnimatedScale(
+          scale: _hovered ? 1.1 : 1,
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            width: 23,
+            height: 23,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hovered
+                  ? widget.color.withValues(alpha: widget.done ? 0.09 : 0.12)
+                  : Colors.transparent,
+            ),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              transitionBuilder: (child, animation) =>
+                  ScaleTransition(scale: animation, child: child),
+              child: Icon(
+                widget.done
+                    ? Icons.check_circle
+                    : Icons.radio_button_unchecked,
+                key: widget.indicatorKey,
+                size: 17,
+                color: widget.color,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
